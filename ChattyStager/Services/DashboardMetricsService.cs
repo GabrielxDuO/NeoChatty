@@ -3,15 +3,15 @@ namespace ChattyStager.Services;
 using ChattyStager.Model;
 using System.Diagnostics;
 
-public class DashboardService
+public class DashboardMetricsService
 {
-    private readonly DatabaseAdminService _databaseService;
-    private readonly BackendProcessService _backendProcessService;
+    private readonly DatabaseSetupService _databaseService;
+    private readonly BackendSupervisorService _backendSupervisor;
 
-    public DashboardService(DatabaseAdminService databaseService, BackendProcessService backendProcessService)
+    public DashboardMetricsService(DatabaseSetupService databaseService, BackendSupervisorService backendSupervisor)
     {
         _databaseService = databaseService;
-        _backendProcessService = backendProcessService;
+        _backendSupervisor = backendSupervisor;
     }
 
     public async Task<DashboardSnapshot> GetSnapshotAsync(StagerConfig config)
@@ -21,16 +21,21 @@ public class DashboardService
         var freeDisk = drive.AvailableFreeSpace / 1024d / 1024d / 1024d;
         var totalMemory = GC.GetGCMemoryInfo().TotalAvailableMemoryBytes / 1024d / 1024d;
         var usedMemory = Process.GetCurrentProcess().WorkingSet64 / 1024d / 1024d;
+        var backend = await _backendSupervisor.GetStatusAsync(config);
 
-        var messages = 0L;
-        var users = 0L;
+        var databaseOk = true;
+        var databaseMessage = "Database metrics loaded.";
+        long messages = 0;
+        long users = 0;
         try
         {
             messages = await _databaseService.CountMessagesLast24HoursAsync(config);
             users = await _databaseService.CountUsersAsync(config);
         }
-        catch
+        catch (Exception ex)
         {
+            databaseOk = false;
+            databaseMessage = ex.Message;
         }
 
         return new DashboardSnapshot(
@@ -41,7 +46,9 @@ public class DashboardService
             DiskTotalGb: totalDisk,
             MessagesLast24Hours: messages,
             RegisteredUsers: users,
-            BackendRunning: _backendProcessService.GetStatus().IsRunning,
+            DatabaseOk: databaseOk,
+            DatabaseMessage: databaseMessage,
+            Backend: backend,
             UpdatedAt: DateTimeOffset.Now);
     }
 

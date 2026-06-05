@@ -10,12 +10,13 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
-builder.Services.AddHttpClient<DeploymentService>();
+builder.Services.AddHttpClient<GitHubActionsArtifactService>();
+builder.Services.AddHttpClient<BackendSupervisorService>();
 builder.Services.AddSingleton<StagerConfigService>();
 builder.Services.AddSingleton<SystemInspectionService>();
-builder.Services.AddSingleton<DatabaseAdminService>();
-builder.Services.AddSingleton<BackendProcessService>();
-builder.Services.AddSingleton<DashboardService>();
+builder.Services.AddSingleton<DatabaseSetupService>();
+builder.Services.AddSingleton<ArtifactDeploymentService>();
+builder.Services.AddSingleton<DashboardMetricsService>();
 
 var app = builder.Build();
 

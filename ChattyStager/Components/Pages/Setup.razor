@@ -4,16 +4,16 @@
 @inject NavigationManager NavigationManager
 @inject StagerConfigService ConfigService
 @inject SystemInspectionService InspectionService
-@inject DeploymentService DeploymentService
-@inject DatabaseAdminService DatabaseService
+@inject ArtifactDeploymentService ArtifactDeployment
+@inject DatabaseSetupService DatabaseSetup
 
 <PageTitle>Setup</PageTitle>
 
 <main class="min-h-screen bg-slate-50 p-6">
-    <div class="mx-auto flex min-h-[calc(100vh-3rem)] max-w-5xl flex-col gap-5">
+    <div class="mx-auto flex min-h-[calc(100vh-3rem)] max-w-6xl flex-col gap-5">
         <header>
             <h1 class="text-3xl font-semibold text-slate-950">ChattyStager Setup</h1>
-            <p class="text-slate-500">Prepare the host, deploy artifacts, initialize the database, and write backend configuration.</p>
+            <p class="text-slate-500">Check runtime, initialize database, deploy GitHub Actions artifacts, and write backend config.</p>
         </header>
 
         <nav aria-label="Progress" class="rounded-md bg-white p-3 shadow-sm">
@@ -29,12 +29,11 @@
 
         @if (!string.IsNullOrWhiteSpace(status))
         {
-            <p class="rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">@status</p>
+            <p class="alert-info" role="status">@status</p>
         }
-
         @if (!string.IsNullOrWhiteSpace(error))
         {
-            <p class="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">@error</p>
+            <p class="alert-error" role="alert">@error</p>
         }
 
         <section class="panel grow">
@@ -43,28 +42,36 @@
 
         <footer class="flex justify-between">
             <button type="button" class="btn-secondary" @onclick="PrevStep" disabled="@(Step == 0 || busy)">Previous</button>
-            <button type="button" class="btn-primary" @onclick="NextStep" disabled="@busy">@(Step == steps.Length - 1 ? "Open Dashboard" : "Next")</button>
+            <button type="button" class="btn-primary" @onclick="NextStep" disabled="@(!CanMoveNext || busy)">@(Step == steps.Length - 1 ? "Open Dashboard" : "Next")</button>
         </footer>
     </div>
 </main>
 
 @code {
-    private readonly string[] steps = ["Check Host", "Database", "Artifacts", "Backend Config", "Finish"];
+    private readonly string[] steps = ["Runtime", "Database", "Artifacts", "Backend Config", "Finish"];
     private StagerConfig config = new();
     private RuntimeCheckResult? runtime;
+    private DeploymentResult? databaseResult;
+    private DeploymentResult? backendDeployResult;
+    private DeploymentResult? webDeployResult;
     private int Step;
     private bool busy;
     private string status = "";
     private string error = "";
     private string sqlPath = "";
 
+    private bool CanMoveNext => Step switch
+    {
+        0 => runtime?.IsReady == true,
+        1 => databaseResult?.Success == true,
+        2 => backendDeployResult?.Success == true && webDeployResult?.Success == true,
+        _ => true,
+    };
+
     protected override async Task OnInitializedAsync()
     {
         config = await ConfigService.LoadAsync();
-        sqlPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "init.sql"));
-        if (!File.Exists(sqlPath))
-            sqlPath = Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), "..", "init.sql"));
-
+        sqlPath = ResolveInitSqlPath();
         await RunChecksAsync();
     }
 
@@ -74,18 +81,19 @@
         {
             0 => @<div class="space-y-5">
                 <div>
-                    <h2 class="section-title">Host Runtime</h2>
-                    <p class="text-sm text-slate-500">Chatty backend expects Node.js 22 and MySQL 8 or MariaDB 11.</p>
+                    <h2 class="section-title">Runtime Checks</h2>
+                    <p class="text-sm text-slate-500">Node.js 22, database client, and database connection must pass before deployment.</p>
                 </div>
-                <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
                     @RenderRuntimeItem(runtime?.Node)
-                    @RenderRuntimeItem(runtime?.Database)
+                    @RenderRuntimeItem(runtime?.DatabaseClient)
+                    @RenderRuntimeItem(runtime?.DatabaseConnection)
                 </div>
                 <button type="button" class="btn-secondary" @onclick="RunChecksAsync" disabled="@busy">Run Checks</button>
             </div>,
-            1 => @<EditForm Model="config" OnValidSubmit="SaveAndTestDatabaseAsync" class="space-y-5">
+            1 => @<EditForm Model="config" OnValidSubmit="InitializeDatabaseAsync" class="space-y-5">
                 <DataAnnotationsValidator />
-                <h2 class="section-title">Database</h2>
+                <h2 class="section-title">Database Initialization</h2>
                 <div class="form-grid">
                     <label>
                         <span>Host</span>
@@ -107,27 +115,41 @@
                         <span>Password</span>
                         <InputText name="mysqlPassword" type="password" autocomplete="current-password" class="form-input" @bind-Value="config.MySqlPassword" />
                     </label>
+                    <label>
+                        <span>SQL init file</span>
+                        <InputText name="sqlPath" class="form-input" @bind-Value="sqlPath" />
+                    </label>
                 </div>
-                <label>
-                    <span class="mb-1 block text-sm font-medium text-slate-700">SQL init file</span>
-                    <InputText name="sqlPath" class="form-input" @bind-Value="sqlPath" />
-                </label>
-                <div class="flex flex-wrap gap-3">
-                    <button type="submit" class="btn-primary" disabled="@busy">Save and Test Connection</button>
-                    <button type="button" class="btn-secondary" @onclick="InitializeDatabaseAsync" disabled="@busy">Initialize Database</button>
-                </div>
+                <button type="submit" class="btn-primary" disabled="@busy">Initialize and Validate Database</button>
+                @RenderDeploymentResult(databaseResult)
             </EditForm>,
             2 => @<EditForm Model="config" OnValidSubmit="DeployArtifactsAsync" class="space-y-5">
-                <h2 class="section-title">Actions Artifacts</h2>
-                <p class="text-sm text-slate-500">Provide direct artifact zip URLs or local zip paths. GitHub token is used as a bearer token when set.</p>
+                <h2 class="section-title">GitHub Actions Artifacts</h2>
+                <p class="text-sm text-slate-500">Downloads artifacts from the latest successful workflow run. Token is read from this config or GITHUB_TOKEN.</p>
                 <div class="form-grid">
                     <label>
-                        <span>Backend artifact URL/path</span>
-                        <InputText name="backendArtifactUrl" class="form-input" @bind-Value="config.BackendArtifactUrl" />
+                        <span>Owner</span>
+                        <InputText name="githubOwner" class="form-input" @bind-Value="config.GitHubOwner" />
                     </label>
                     <label>
-                        <span>Web artifact URL/path</span>
-                        <InputText name="webArtifactUrl" class="form-input" @bind-Value="config.WebArtifactUrl" />
+                        <span>Repo</span>
+                        <InputText name="githubRepo" class="form-input" @bind-Value="config.GitHubRepo" />
+                    </label>
+                    <label>
+                        <span>Workflow file or ID</span>
+                        <InputText name="githubWorkflow" class="form-input" @bind-Value="config.GitHubWorkflow" />
+                    </label>
+                    <label>
+                        <span>Branch</span>
+                        <InputText name="githubBranch" class="form-input" @bind-Value="config.GitHubBranch" />
+                    </label>
+                    <label>
+                        <span>Backend artifact name</span>
+                        <InputText name="backendArtifactName" class="form-input" @bind-Value="config.BackendArtifactName" />
+                    </label>
+                    <label>
+                        <span>Web artifact name</span>
+                        <InputText name="webArtifactName" class="form-input" @bind-Value="config.WebArtifactName" />
                     </label>
                     <label>
                         <span>GitHub token</span>
@@ -138,18 +160,34 @@
                         <InputText name="deployRoot" class="form-input" @bind-Value="config.DeployRoot" />
                     </label>
                 </div>
-                <button type="submit" class="btn-primary" disabled="@busy">Download and Deploy</button>
+                <label class="inline-flex items-center gap-2 text-sm font-medium text-slate-700">
+                    <InputCheckbox name="installProdDeps" class="h-5 w-5 accent-blue-600" @bind-Value="config.InstallBackendProductionDependencies" />
+                    Install backend production dependencies when node_modules is missing
+                </label>
+                <button type="submit" class="btn-primary" disabled="@busy">Download and Deploy Artifacts</button>
+                <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                    @RenderDeploymentResult(backendDeployResult)
+                    @RenderDeploymentResult(webDeployResult)
+                </div>
             </EditForm>,
             3 => @<EditForm Model="config" OnValidSubmit="SaveBackendConfigAsync" class="space-y-5">
                 <h2 class="section-title">Backend Config</h2>
                 <div class="form-grid">
                     <label>
-                        <span>Server port</span>
-                        <InputNumber name="serverPort" class="form-input" @bind-Value="config.ServerPort" />
+                        <span>Backend executable</span>
+                        <InputText name="backendExecutable" class="form-input" @bind-Value="config.BackendExecutable" />
                     </label>
                     <label>
-                        <span>Backend start command</span>
-                        <InputText name="backendStartCommand" class="form-input" @bind-Value="config.BackendStartCommand" />
+                        <span>Backend arguments</span>
+                        <InputText name="backendArguments" class="form-input" @bind-Value="config.BackendArguments" />
+                    </label>
+                    <label>
+                        <span>Health URL</span>
+                        <InputText name="healthUrl" class="form-input" @bind-Value="config.HealthUrl" />
+                    </label>
+                    <label>
+                        <span>Server port</span>
+                        <InputNumber name="serverPort" class="form-input" @bind-Value="config.ServerPort" />
                     </label>
                     <label>
                         <span>MOTD</span>
@@ -160,17 +198,13 @@
                         <InputText name="info" class="form-input" @bind-Value="config.Info" />
                     </label>
                 </div>
-                <label class="inline-flex items-center gap-2 text-sm font-medium text-slate-700">
-                    <InputCheckbox name="useHttps" class="h-5 w-5 accent-blue-600" @bind-Value="config.UseHttps" />
-                    Use HTTPS in backend config
-                </label>
                 <button type="submit" class="btn-primary" disabled="@busy">Write Backend Config</button>
             </EditForm>,
             _ => @<div class="space-y-5">
                 <h2 class="section-title">Ready</h2>
-                <p class="text-slate-600">Setup is marked complete. Use Settings to start or stop the backend service, and Manage Users to call the database ban procedures.</p>
-                <button type="button" class="btn-primary" @onclick="CompleteSetupAsync">Finish Setup</button>
-            </div>
+                <p class="text-slate-600">Setup completed. Use Settings to start the backend and Manage Users to call ban/unban procedures.</p>
+                <button type="button" class="btn-primary" @onclick="CompleteSetupAsync" disabled="@busy">Finish Setup</button>
+            </div>,
         };
     }
 
@@ -178,9 +212,37 @@
     {
         return @<article class="rounded-md border border-slate-200 bg-slate-50 p-4">
             <p class="text-sm text-slate-500">@(item?.Name ?? "Checking...")</p>
-            <p class="mt-1 text-xl font-semibold text-slate-950">@(item?.Detected ?? "Not checked")</p>
+            <p class="mt-1 text-lg font-semibold text-slate-950 break-words">@(item?.Detected ?? "Not checked")</p>
             <p class="mt-2 text-sm @(item?.IsSupported == true ? "text-green-700" : "text-red-700")">@(item?.Message ?? "Run checks to inspect this host.")</p>
+            <p class="mt-1 text-xs text-slate-500 break-all">Path: @(item?.Path ?? "-")</p>
             <p class="mt-1 text-xs text-slate-500">Required: @(item?.Required ?? "-")</p>
+        </article>;
+    }
+
+    private RenderFragment RenderDeploymentResult(DeploymentResult? result)
+    {
+        return @<article class="mt-4 rounded-md border border-slate-200 bg-slate-50 p-4">
+            @if (result == null)
+            {
+                <p class="text-sm text-slate-500">No operation has run yet.</p>
+            }
+            else
+            {
+                <p class="font-semibold @(result.Success ? "text-green-700" : "text-red-700")">@result.Message</p>
+                <ol class="mt-3 space-y-2 text-sm">
+                    @foreach (var step in result.Steps)
+                    {
+                        <li class="flex items-start justify-between gap-4 rounded bg-white px-3 py-2">
+                            <span>@step.Name</span>
+                            <span class="font-semibold @(step.State == OperationState.Success ? "text-green-700" : "text-red-700")">@step.State</span>
+                        </li>
+                    }
+                </ol>
+                <details class="mt-3">
+                    <summary class="cursor-pointer text-sm font-medium text-slate-700">Logs</summary>
+                    <pre class="mt-2 max-h-72 overflow-auto rounded bg-slate-950 p-3 text-xs text-slate-50" tabindex="0"><code>@string.Join(Environment.NewLine, result.Logs.Select(log => $"[{log.At:HH:mm:ss}] {log.Level}: {log.Message}"))</code></pre>
+                </details>
+            }
         </article>;
     }
 
@@ -188,18 +250,9 @@
     {
         await ExecuteAsync(async () =>
         {
-            runtime = await InspectionService.CheckRuntimeAsync();
-            status = runtime.IsReady ? "Host runtime checks passed." : "Host runtime checks need attention.";
-        });
-    }
-
-    private async Task SaveAndTestDatabaseAsync()
-    {
-        await ExecuteAsync(async () =>
-        {
-            await ConfigService.SaveAsync(config);
-            await DatabaseService.TestConnectionAsync(config);
-            status = "Database connection succeeded.";
+            ConfigService.ApplyDefaults(config);
+            runtime = await InspectionService.CheckRuntimeAsync(config);
+            status = runtime.IsReady ? "Runtime checks passed." : "Runtime checks need attention.";
         });
     }
 
@@ -208,8 +261,10 @@
         await ExecuteAsync(async () =>
         {
             await ConfigService.SaveAsync(config);
-            await DeploymentService.InitializeDatabaseAsync(config, DatabaseService, sqlPath);
-            status = "Database initialized.";
+            databaseResult = await DatabaseSetup.InitializeDatabaseAsync(config, sqlPath);
+            if (!databaseResult.Success)
+                throw new InvalidOperationException(databaseResult.Message);
+            status = databaseResult.Message;
         });
     }
 
@@ -218,11 +273,14 @@
         await ExecuteAsync(async () =>
         {
             await ConfigService.SaveAsync(config);
-            if (!string.IsNullOrWhiteSpace(config.BackendArtifactUrl))
-                status = (await DeploymentService.DeployBackendAsync(config)).Message;
-
-            if (!string.IsNullOrWhiteSpace(config.WebArtifactUrl))
-                status = $"{status} {(await DeploymentService.DeployWebAsync(config)).Message}".Trim();
+            backendDeployResult = await ArtifactDeployment.DeployBackendFromGitHubAsync(config);
+            if (!backendDeployResult.Success)
+                throw new InvalidOperationException(backendDeployResult.Message);
+            webDeployResult = await ArtifactDeployment.DeployWebFromGitHubAsync(config);
+            if (!webDeployResult.Success)
+                throw new InvalidOperationException(webDeployResult.Message);
+            await ConfigService.SaveAsync(config);
+            status = "Backend and web artifacts deployed.";
         });
     }
 
@@ -232,7 +290,7 @@
         {
             await ConfigService.SaveAsync(config);
             await ConfigService.WriteServerConfigAsync(config);
-            status = "Backend config was written.";
+            status = $"Backend config written to {config.ServerConfigPath}.";
         });
     }
 
@@ -268,6 +326,7 @@
     {
         busy = true;
         error = "";
+        status = "";
         try
         {
             await action();
@@ -280,5 +339,17 @@
         {
             busy = false;
         }
+    }
+
+    private static string ResolveInitSqlPath()
+    {
+        var candidates = new[]
+        {
+            Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), "..", "init.sql")),
+            Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "init.sql")),
+            Path.GetFullPath("init.sql"),
+        };
+
+        return candidates.FirstOrDefault(File.Exists) ?? candidates[0];
     }
 }

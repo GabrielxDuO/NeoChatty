@@ -2,60 +2,92 @@ namespace ChattyStager.Services;
 
 using ChattyStager.Model;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 
 public class SystemInspectionService
 {
-    public async Task<RuntimeCheckResult> CheckRuntimeAsync()
+    private readonly DatabaseSetupService _databaseService;
+
+    public SystemInspectionService(DatabaseSetupService databaseService)
+    {
+        _databaseService = databaseService;
+    }
+
+    public async Task<RuntimeCheckResult> CheckRuntimeAsync(StagerConfig config)
     {
         var node = await CheckNodeAsync();
-        var database = await CheckDatabaseAsync();
-        return new RuntimeCheckResult(node, database);
+        var databaseClient = await CheckDatabaseClientAsync();
+        var databaseConnection = await _databaseService.TestConnectionAsync(config);
+        return new RuntimeCheckResult(node, databaseClient, databaseConnection);
     }
 
     private static async Task<RuntimeCheckItem> CheckNodeAsync()
     {
-        var output = await RunCommandAsync("node", "--version");
-        if (output.Success && !IsNode22(output.Output))
+        var candidates = new List<(string FileName, string Arguments)>
         {
-            var miseOutput = await RunCommandAsync("mise", "exec -- node --version");
-            if (miseOutput.Success)
-                output = miseOutput;
+            ("node", "--version"),
+            ("mise", "exec -- node --version"),
+            ("nvm", "exec 22 node --version"),
+        };
+
+        foreach (var candidate in candidates)
+        {
+            var result = await TryRunAsync(candidate.FileName, candidate.Arguments);
+            if (!result.Success)
+                continue;
+
+            var version = result.Output.Trim();
+            var supported = IsNode22(version);
+            if (supported)
+            {
+                return new RuntimeCheckItem("Node.js", "22.x", version, result.Path, true, true, "Node.js 22 is available.");
+            }
         }
 
-        if (!output.Success)
-        {
-            return new RuntimeCheckItem("Node.js", "22.x", output.Message, false, false, "node command is unavailable.");
-        }
-
-        var version = output.Output.Trim();
-        var supported = IsNode22(version);
-        return new RuntimeCheckItem("Node.js", "22.x", version, true, supported, supported ? "Node.js 22 is installed." : "Install Node.js 22 for the backend runtime.");
+        var fallback = await TryRunAsync("node", "--version");
+        return new RuntimeCheckItem(
+            "Node.js",
+            "22.x",
+            fallback.Success ? fallback.Output.Trim() : fallback.Message,
+            fallback.Path,
+            fallback.Success,
+            false,
+            "Node.js 22 is required.");
     }
 
-    private static async Task<RuntimeCheckItem> CheckDatabaseAsync()
+    private static async Task<RuntimeCheckItem> CheckDatabaseClientAsync()
     {
-        var mysql = await RunCommandAsync("mysql", "--version");
-        if (!mysql.Success)
-            mysql = await RunCommandAsync("mariadb", "--version");
-        if (!mysql.Success)
-            mysql = await RunCommandAsync("/opt/homebrew/opt/mariadb@11.8/bin/mariadb", "--version");
-        if (!mysql.Success)
-            mysql = await RunCommandAsync("/opt/homebrew/opt/mysql@8.4/bin/mysql", "--version");
-
-        if (!mysql.Success)
+        var candidates = new[]
         {
-            return new RuntimeCheckItem("Database CLI", "MySQL 8.x or MariaDB 11.x", mysql.Message, false, false, "mysql or mariadb command is unavailable.");
+            ("mysql", "--version"),
+            ("mariadb", "--version"),
+            ("/opt/homebrew/opt/mariadb@11.8/bin/mariadb", "--version"),
+            ("/opt/homebrew/opt/mysql@8.4/bin/mysql", "--version"),
+        };
+
+        foreach (var candidate in candidates)
+        {
+            var result = await TryRunAsync(candidate.Item1, candidate.Item2);
+            if (!result.Success)
+                continue;
+
+            var detected = result.Output.Trim();
+            var lower = detected.ToLowerInvariant();
+            var isMaria = lower.Contains("mariadb");
+            var match = Regex.Match(detected, @"(?<major>\d+)\.(?<minor>\d+)\.");
+            var supported = match.Success && int.Parse(match.Groups["major"].Value) == (isMaria ? 11 : 8);
+            return new RuntimeCheckItem(
+                "Database CLI",
+                "MySQL 8.x or MariaDB 11.x",
+                detected,
+                result.Path,
+                true,
+                supported,
+                supported ? "Supported database client detected." : "Install MySQL 8 or MariaDB 11.");
         }
 
-        var detected = mysql.Output.Trim();
-        var lower = detected.ToLowerInvariant();
-        var isMaria = lower.Contains("mariadb");
-        var match = Regex.Match(detected, @"(?<major>\d+)\.(?<minor>\d+)\.");
-        var supported = match.Success && int.Parse(match.Groups["major"].Value) == (isMaria ? 11 : 8);
-        var required = isMaria ? "MariaDB 11.x" : "MySQL 8.x";
-
-        return new RuntimeCheckItem("Database CLI", required, detected, true, supported, supported ? "Supported database client detected." : "Install MySQL 8 or MariaDB 11.");
+        return new RuntimeCheckItem("Database CLI", "MySQL 8.x or MariaDB 11.x", "Not found", "", false, false, "mysql or mariadb command is unavailable.");
     }
 
     private static bool IsNode22(string version)
@@ -64,37 +96,37 @@ public class SystemInspectionService
         return match.Success && int.Parse(match.Groups["major"].Value) == 22;
     }
 
-    private static async Task<(bool Success, string Output, string Message)> RunCommandAsync(string fileName, string arguments)
+    private static async Task<(bool Success, string Output, string Message, string Path)> TryRunAsync(string fileName, string arguments)
     {
         try
         {
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = fileName,
-                Arguments = arguments,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-
-            using var process = Process.Start(startInfo);
-            if (process == null)
-                return (false, "", "Failed to start process.");
-
-            var outputTask = process.StandardOutput.ReadToEndAsync();
-            var errorTask = process.StandardError.ReadToEndAsync();
-            await process.WaitForExitAsync();
-
-            var output = (await outputTask).Trim();
-            var error = (await errorTask).Trim();
-            return process.ExitCode == 0
-                ? (true, string.IsNullOrWhiteSpace(output) ? error : output, "")
-                : (false, output, string.IsNullOrWhiteSpace(error) ? output : error);
+            var result = await ProcessRunner.RunAsync(fileName, arguments, timeout: TimeSpan.FromSeconds(10));
+            var path = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+                ? fileName
+                : (await ResolvePathAsync(fileName)) ?? fileName;
+            return result.ExitCode == 0
+                ? (true, string.IsNullOrWhiteSpace(result.Output) ? result.Error : result.Output, "", path)
+                : (false, result.Output, string.IsNullOrWhiteSpace(result.Error) ? result.Output : result.Error, path);
         }
         catch (Exception ex)
         {
-            return (false, "", ex.Message);
+            return (false, "", ex.Message, fileName);
+        }
+    }
+
+    private static async Task<string?> ResolvePathAsync(string fileName)
+    {
+        if (fileName.Contains('/'))
+            return File.Exists(fileName) ? fileName : null;
+
+        try
+        {
+            var result = await ProcessRunner.RunAsync("/usr/bin/which", fileName, timeout: TimeSpan.FromSeconds(5));
+            return result.ExitCode == 0 ? result.Output.Trim() : null;
+        }
+        catch
+        {
+            return null;
         }
     }
 }

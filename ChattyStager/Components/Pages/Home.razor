@@ -3,7 +3,7 @@
 
 @inject NavigationManager NavigationManager
 @inject StagerConfigService ConfigService
-@inject DashboardService DashboardService
+@inject DashboardMetricsService DashboardMetrics
 
 <PageTitle>Dashboard</PageTitle>
 
@@ -11,7 +11,7 @@
     <header class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
             <h1 class="text-3xl font-semibold text-slate-950">Chatty Dashboard</h1>
-            <p class="text-slate-500">Runtime, database, and backend service overview.</p>
+            <p class="text-slate-500">System, database, and managed backend status.</p>
         </div>
         <button type="button" class="btn-primary" @onclick="LoadDashboardAsync" disabled="@loading">
             @(loading ? "Refreshing..." : "Refresh")
@@ -20,7 +20,7 @@
 
     @if (!string.IsNullOrWhiteSpace(error))
     {
-        <p class="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">@error</p>
+        <p class="alert-error" role="alert">@error</p>
     }
 
     @if (snapshot == null)
@@ -31,20 +31,25 @@
     }
     else
     {
+        @if (!snapshot.DatabaseOk)
+        {
+            <p class="alert-error" role="alert">Database metrics unavailable: @snapshot.DatabaseMessage</p>
+        }
+
         <section class="grid grid-cols-1 gap-4 lg:grid-cols-4">
             <article class="metric">
                 <span>Backend</span>
-                <strong>@(snapshot.BackendRunning ? "Running" : "Stopped")</strong>
-                <small>Managed process state</small>
+                <strong>@(snapshot.Backend.IsRunning ? "Running" : "Stopped")</strong>
+                <small>@snapshot.Backend.Message</small>
             </article>
             <article class="metric">
                 <span>Messages / 24h</span>
-                <strong>@snapshot.MessagesLast24Hours</strong>
+                <strong>@(snapshot.DatabaseOk ? snapshot.MessagesLast24Hours.ToString() : "N/A")</strong>
                 <small>Rows created in messages</small>
             </article>
             <article class="metric">
                 <span>Registered Users</span>
-                <strong>@snapshot.RegisteredUsers</strong>
+                <strong>@(snapshot.DatabaseOk ? snapshot.RegisteredUsers.ToString() : "N/A")</strong>
                 <small>Total rows in users</small>
             </article>
             <article class="metric">
@@ -65,6 +70,28 @@
                 <p class="metric-line">@snapshot.DiskUsedGb.ToString("0.0") GB / @snapshot.DiskTotalGb.ToString("0.0") GB</p>
                 <progress class="w-full accent-blue-600" value="@snapshot.DiskUsedGb" max="@snapshot.DiskTotalGb"></progress>
             </article>
+        </section>
+
+        <section class="panel">
+            <h2 class="section-title">Backend Runtime</h2>
+            <dl class="mt-4 grid grid-cols-1 gap-3 text-sm md:grid-cols-2">
+                <div>
+                    <dt class="text-slate-500">Health URL</dt>
+                    <dd class="font-mono text-slate-950">@snapshot.Backend.HealthUrl</dd>
+                </div>
+                <div>
+                    <dt class="text-slate-500">PID</dt>
+                    <dd class="font-mono text-slate-950">@(snapshot.Backend.ProcessId?.ToString() ?? "N/A")</dd>
+                </div>
+                <div>
+                    <dt class="text-slate-500">Log path</dt>
+                    <dd class="font-mono text-slate-950 break-all">@snapshot.Backend.LogPath</dd>
+                </div>
+                <div>
+                    <dt class="text-slate-500">Health check</dt>
+                    <dd class="font-semibold @(snapshot.Backend.HealthOk ? "text-green-700" : "text-red-700")">@(snapshot.Backend.HealthOk ? "OK" : "Failed")</dd>
+                </div>
+            </dl>
         </section>
 
         <p class="text-sm text-slate-500">Updated at @snapshot.UpdatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</p>
@@ -98,7 +125,7 @@
         error = "";
         try
         {
-            snapshot = await DashboardService.GetSnapshotAsync(config);
+            snapshot = await DashboardMetrics.GetSnapshotAsync(config);
         }
         catch (Exception ex)
         {

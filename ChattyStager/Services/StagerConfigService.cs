@@ -13,7 +13,7 @@ public class StagerConfigService
         _environment = environment;
     }
 
-    public string ConfigPath => Path.Combine(Directory.GetCurrentDirectory(), "ChattyStager.json");
+    public string ConfigPath => Path.Combine(_environment.ContentRootPath, "ChattyStager.json");
 
     public async Task<StagerConfig> LoadAsync()
     {
@@ -25,71 +25,27 @@ public class StagerConfigService
     public async Task SaveAsync(StagerConfig config)
     {
         ApplyDefaults(config);
-        await StagerConfig.Flush(config);
-    }
-
-    public string GetDeployRoot(StagerConfig config)
-    {
-        ApplyDefaults(config);
-        return config.DeployRoot;
-    }
-
-    public string GetBackendDeployPath(StagerConfig config)
-    {
-        return Path.Combine(GetDeployRoot(config), "backend");
-    }
-
-    public string GetArtifactCachePath(StagerConfig config)
-    {
-        return Path.Combine(GetDeployRoot(config), "artifacts");
-    }
-
-    public string GetServerConfigPath(StagerConfig config)
-    {
-        ApplyDefaults(config);
-        return config.ServerConfigPath;
-    }
-
-    public string BuildServerConfig(StagerConfig config)
-    {
-        var payload = new
+        Directory.CreateDirectory(Path.GetDirectoryName(ConfigPath)!);
+        var jsonText = JsonSerializer.Serialize(config, new JsonSerializerOptions
         {
-            USE_HTTPS = config.UseHttps,
-            PORT = config.ServerPort,
-            DB = new
-            {
-                NAME = config.MySqlDatabase,
-                USER = config.MySqlUser,
-                PASSWORD = config.MySqlPassword,
-                HOST = config.MySqlAddr,
-                PORT = config.MySqlPort
-            },
-            MOTD = config.Motd,
-            INFO = config.Info
-        };
-
-        var json = JsonSerializer.Serialize(payload, new JsonSerializerOptions
-        {
-            WriteIndented = true
+            WriteIndented = true,
         });
-
-        return $"module.exports = {json};{Environment.NewLine}";
+        await File.WriteAllTextAsync(ConfigPath, jsonText);
     }
 
-    public async Task WriteServerConfigAsync(StagerConfig config)
-    {
-        var path = GetServerConfigPath(config);
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        await File.WriteAllTextAsync(path, BuildServerConfig(config));
-    }
-
-    private void ApplyDefaults(StagerConfig config)
+    public void ApplyDefaults(StagerConfig config)
     {
         if (string.IsNullOrWhiteSpace(config.DeployRoot))
             config.DeployRoot = Path.Combine(_environment.ContentRootPath, "deploy");
 
+        if (string.IsNullOrWhiteSpace(config.BackendWorkingDirectory))
+            config.BackendWorkingDirectory = GetBackendDeployPath(config);
+
         if (string.IsNullOrWhiteSpace(config.ServerConfigPath))
-            config.ServerConfigPath = Path.Combine(GetBackendDeployPath(config), "chatty.server.config.js");
+            config.ServerConfigPath = Path.Combine(config.BackendWorkingDirectory, "chatty.server.config.js");
+
+        if (string.IsNullOrWhiteSpace(config.LogDirectory))
+            config.LogDirectory = Path.Combine(config.DeployRoot, "logs");
 
         if (string.IsNullOrWhiteSpace(config.MySqlAddr))
             config.MySqlAddr = "localhost";
@@ -106,7 +62,87 @@ public class StagerConfigService
         if (config.ServerPort <= 0)
             config.ServerPort = 5637;
 
-        if (string.IsNullOrWhiteSpace(config.BackendStartCommand))
-            config.BackendStartCommand = "node dist/index.js";
+        if (string.IsNullOrWhiteSpace(config.HealthUrl))
+            config.HealthUrl = $"http://127.0.0.1:{config.ServerPort}/api/health";
+
+        if (string.IsNullOrWhiteSpace(config.BackendExecutable))
+            config.BackendExecutable = "node";
+
+        if (string.IsNullOrWhiteSpace(config.BackendArguments))
+            config.BackendArguments = "dist/index.js";
+
+        if (string.IsNullOrWhiteSpace(config.GitHubToken))
+        {
+            config.GitHubToken = Environment.GetEnvironmentVariable("GITHUB_TOKEN") ?? "";
+        }
+    }
+
+    public string GetBackendDeployPath(StagerConfig config)
+    {
+        return Path.Combine(config.DeployRoot, "backend");
+    }
+
+    public string GetWebDeployPath(StagerConfig config)
+    {
+        return Path.Combine(_environment.WebRootPath, "chatty-web");
+    }
+
+    public string GetArtifactCachePath(StagerConfig config)
+    {
+        return Path.Combine(config.DeployRoot, "artifacts");
+    }
+
+    public string GetTempPath(StagerConfig config)
+    {
+        return Path.Combine(config.DeployRoot, "tmp");
+    }
+
+    public string GetPidPath(StagerConfig config)
+    {
+        return Path.Combine(config.LogDirectory, "backend.pid");
+    }
+
+    public string GetStatusPath(StagerConfig config)
+    {
+        return Path.Combine(config.LogDirectory, "backend.status.json");
+    }
+
+    public string GetBackendLogPath(StagerConfig config)
+    {
+        return Path.Combine(config.LogDirectory, "backend.log");
+    }
+
+    public string BuildServerConfig(StagerConfig config)
+    {
+        ApplyDefaults(config);
+        var payload = new
+        {
+            USE_HTTPS = config.UseHttps,
+            PORT = config.ServerPort,
+            DB = new
+            {
+                NAME = config.MySqlDatabase,
+                USER = config.MySqlUser,
+                PASSWORD = config.MySqlPassword,
+                HOST = config.MySqlAddr,
+                PORT = config.MySqlPort,
+            },
+            MOTD = config.Motd,
+            INFO = config.Info,
+        };
+
+        var json = JsonSerializer.Serialize(payload, new JsonSerializerOptions
+        {
+            WriteIndented = true,
+        });
+
+        return $"module.exports = {json};{Environment.NewLine}";
+    }
+
+    public async Task WriteServerConfigAsync(StagerConfig config)
+    {
+        ApplyDefaults(config);
+        Directory.CreateDirectory(Path.GetDirectoryName(config.ServerConfigPath)!);
+        await File.WriteAllTextAsync(config.ServerConfigPath, BuildServerConfig(config));
     }
 }

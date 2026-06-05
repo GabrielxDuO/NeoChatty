@@ -53,6 +53,14 @@
         @apply inline-flex min-h-11 items-center justify-center rounded-md bg-red-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-red-700 disabled:pointer-events-none disabled:opacity-50;
     }
 
+    .alert-info {
+        @apply rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800;
+    }
+
+    .alert-error {
+        @apply rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700;
+    }
+
     .nav-link {
         @apply rounded-md px-3 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/10 hover:text-white;
     }

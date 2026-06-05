@@ -2,19 +2,24 @@
 @rendermode InteractiveServer
 
 @inject StagerConfigService ConfigService
-@inject BackendProcessService BackendProcess
+@inject BackendSupervisorService BackendSupervisor
+@inject DatabaseSetupService DatabaseSetup
 
 <PageTitle>Settings</PageTitle>
 
 <main class="p-6 space-y-6">
     <header>
         <h1 class="text-3xl font-semibold text-slate-950">Backend Settings</h1>
-        <p class="text-slate-500">Edit Chatty backend configuration and control the managed process.</p>
+        <p class="text-slate-500">Edit generated backend config and control the managed backend process.</p>
     </header>
 
     @if (!string.IsNullOrWhiteSpace(status))
     {
-        <p class="rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">@status</p>
+        <p class="alert-info" role="status">@status</p>
+    }
+    @if (!string.IsNullOrWhiteSpace(error))
+    {
+        <p class="alert-error" role="alert">@error</p>
     }
 
     @if (config == null)
@@ -25,37 +30,65 @@
     {
         <section class="panel">
             <h2 class="section-title">Service Control</h2>
-            <p class="text-sm text-slate-500">@backendStatus.Message @(backendStatus.ProcessId == null ? "" : $"PID {backendStatus.ProcessId}")</p>
+            <p class="text-sm text-slate-500">@backendStatus.Message</p>
+            <dl class="mt-3 grid grid-cols-1 gap-3 text-sm md:grid-cols-3">
+                <div>
+                    <dt class="text-slate-500">PID</dt>
+                    <dd class="font-mono">@(backendStatus.ProcessId?.ToString() ?? "N/A")</dd>
+                </div>
+                <div>
+                    <dt class="text-slate-500">Health</dt>
+                    <dd class="@(backendStatus.HealthOk ? "text-green-700" : "text-red-700")">@(backendStatus.HealthOk ? "OK" : "Failed")</dd>
+                </div>
+                <div>
+                    <dt class="text-slate-500">Log</dt>
+                    <dd class="font-mono break-all">@backendStatus.LogPath</dd>
+                </div>
+            </dl>
             <div class="mt-4 flex flex-wrap gap-3">
-                <button type="button" class="btn-primary" @onclick="StartBackendAsync" disabled="@backendStatus.IsRunning">Start Backend</button>
-                <button type="button" class="btn-secondary" @onclick="StopBackendAsync" disabled="@(!backendStatus.IsRunning)">Stop Backend</button>
-                <button type="button" class="btn-secondary" @onclick="RefreshStatus">Refresh Status</button>
+                <button type="button" class="btn-primary" @onclick="StartBackendAsync" disabled="@busy">Start Backend</button>
+                <button type="button" class="btn-secondary" @onclick="StopBackendAsync" disabled="@busy">Stop Backend</button>
+                <button type="button" class="btn-secondary" @onclick="RefreshStatusAsync" disabled="@busy">Refresh Status</button>
+                <button type="button" class="btn-secondary" @onclick="TestDatabaseAsync" disabled="@busy">Test Database</button>
             </div>
         </section>
 
         <EditForm Model="config" OnValidSubmit="SaveAsync" class="panel space-y-5">
             <DataAnnotationsValidator />
-            <h2 class="section-title">Configuration File</h2>
-
+            <h2 class="section-title">Backend Runtime</h2>
             <div class="form-grid">
                 <label>
-                    <span>Backend deploy path</span>
-                    <InputText name="deployRoot" class="form-input" @bind-Value="config.DeployRoot" />
+                    <span>Backend working directory</span>
+                    <InputText name="backendWorkingDirectory" class="form-input" @bind-Value="config.BackendWorkingDirectory" />
                 </label>
                 <label>
-                    <span>Backend start command</span>
-                    <InputText name="backendStartCommand" class="form-input" @bind-Value="config.BackendStartCommand" />
+                    <span>Backend executable</span>
+                    <InputText name="backendExecutable" class="form-input" @bind-Value="config.BackendExecutable" />
+                </label>
+                <label>
+                    <span>Backend arguments</span>
+                    <InputText name="backendArguments" class="form-input" @bind-Value="config.BackendArguments" />
+                </label>
+                <label>
+                    <span>Health URL</span>
+                    <InputText name="healthUrl" class="form-input" @bind-Value="config.HealthUrl" />
+                </label>
+                <label>
+                    <span>Log directory</span>
+                    <InputText name="logDirectory" class="form-input" @bind-Value="config.LogDirectory" />
                 </label>
                 <label>
                     <span>Server config path</span>
                     <InputText name="serverConfigPath" class="form-input" @bind-Value="config.ServerConfigPath" />
                 </label>
-                <label>
-                    <span>Server port</span>
-                    <InputNumber name="serverPort" class="form-input" @bind-Value="config.ServerPort" />
-                </label>
             </div>
 
+            <label>
+                <span class="mb-1 block text-sm font-medium text-slate-700">Backend environment (KEY=value per line)</span>
+                <InputTextArea name="backendEnvironment" class="form-input min-h-28" @bind-Value="config.BackendEnvironment" />
+            </label>
+
+            <h2 class="section-title">Database</h2>
             <div class="form-grid">
                 <label>
                     <span>Database host</span>
@@ -77,6 +110,10 @@
                     <span>Database password</span>
                     <InputText name="mysqlPassword" type="password" autocomplete="current-password" class="form-input" @bind-Value="config.MySqlPassword" />
                 </label>
+                <label>
+                    <span>Server port</span>
+                    <InputNumber name="serverPort" class="form-input" @bind-Value="config.ServerPort" />
+                </label>
             </div>
 
             <div class="form-grid">
@@ -88,15 +125,16 @@
                     <span>Info</span>
                     <InputText name="info" class="form-input" @bind-Value="config.Info" />
                 </label>
-                <label class="inline-flex items-center gap-2 text-sm font-medium text-slate-700">
-                    <InputCheckbox name="useHttps" class="h-5 w-5 accent-blue-600" @bind-Value="config.UseHttps" />
-                    Use HTTPS in backend config
-                </label>
             </div>
 
+            <label class="inline-flex items-center gap-2 text-sm font-medium text-slate-700">
+                <InputCheckbox name="useHttps" class="h-5 w-5 accent-blue-600" @bind-Value="config.UseHttps" />
+                Use HTTPS in generated backend config
+            </label>
+
             <div class="flex flex-wrap gap-3">
-                <button type="submit" class="btn-primary">Save Stager Config</button>
-                <button type="button" class="btn-secondary" @onclick="WriteServerConfigAsync">Write Backend Config</button>
+                <button type="submit" class="btn-primary" disabled="@busy">Save Stager Config</button>
+                <button type="button" class="btn-secondary" @onclick="WriteServerConfigAsync" disabled="@busy">Write Backend Config</button>
             </div>
         </EditForm>
     }
@@ -104,13 +142,15 @@
 
 @code {
     private StagerConfig? config;
-    private BackendStatus backendStatus = new(false, null, null, "Backend status is unknown.");
+    private BackendRuntimeStatus backendStatus = new(false, null, null, null, "", false, "Backend status is unknown.", "");
     private string status = "";
+    private string error = "";
+    private bool busy;
 
     protected override async Task OnInitializedAsync()
     {
         config = await ConfigService.LoadAsync();
-        RefreshStatus();
+        await RefreshStatusAsync();
     }
 
     private async Task SaveAsync()
@@ -118,8 +158,11 @@
         if (config == null)
             return;
 
-        await ConfigService.SaveAsync(config);
-        status = "Stager configuration saved.";
+        await ExecuteAsync(async () =>
+        {
+            await ConfigService.SaveAsync(config);
+            status = "Stager configuration saved.";
+        });
     }
 
     private async Task WriteServerConfigAsync()
@@ -127,8 +170,11 @@
         if (config == null)
             return;
 
-        await ConfigService.WriteServerConfigAsync(config);
-        status = $"Backend config written to {ConfigService.GetServerConfigPath(config)}";
+        await ExecuteAsync(async () =>
+        {
+            await ConfigService.WriteServerConfigAsync(config);
+            status = $"Backend config written to {config.ServerConfigPath}";
+        });
     }
 
     private async Task StartBackendAsync()
@@ -136,19 +182,63 @@
         if (config == null)
             return;
 
-        await ConfigService.WriteServerConfigAsync(config);
-        backendStatus = await BackendProcess.StartAsync(config);
-        status = backendStatus.Message;
+        await ExecuteAsync(async () =>
+        {
+            await ConfigService.SaveAsync(config);
+            backendStatus = await BackendSupervisor.StartAsync(config);
+            status = backendStatus.Message;
+        });
     }
 
     private async Task StopBackendAsync()
     {
-        backendStatus = await BackendProcess.StopAsync();
-        status = backendStatus.Message;
+        if (config == null)
+            return;
+
+        await ExecuteAsync(async () =>
+        {
+            backendStatus = await BackendSupervisor.StopAsync(config);
+            status = backendStatus.Message;
+        });
     }
 
-    private void RefreshStatus()
+    private async Task RefreshStatusAsync()
     {
-        backendStatus = BackendProcess.GetStatus();
+        if (config == null)
+            return;
+        backendStatus = await BackendSupervisor.GetStatusAsync(config);
+    }
+
+    private async Task TestDatabaseAsync()
+    {
+        if (config == null)
+            return;
+
+        await ExecuteAsync(async () =>
+        {
+            var result = await DatabaseSetup.TestConnectionAsync(config);
+            if (!result.IsSupported)
+                throw new InvalidOperationException(result.Detected);
+            status = result.Message;
+        });
+    }
+
+    private async Task ExecuteAsync(Func<Task> action)
+    {
+        busy = true;
+        error = "";
+        status = "";
+        try
+        {
+            await action();
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+        finally
+        {
+            busy = false;
+        }
     }
 }
