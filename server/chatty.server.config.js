@@ -5,10 +5,10 @@ module.exports = {
   "DB": {
     "NAME": "chatty",
     "USER": "root",
-    "PASSWORD": "7355608",
-    "HOST": "localhost",
-    "PORT": 3306
+    "PASSWORD": "",
+    "HOST": "127.0.0.1",
+    "PORT": 3307
   },
-  "MOTD": "Chatty Default MOTD - %datetime% - %info%",
-  "INFO": "default chatty server presented. Hello Chatty!"
+  "MOTD": "Chatty managed by ChattyStager - %datetime% - %info%",
+  "INFO": "Local Chatty backend."
 };

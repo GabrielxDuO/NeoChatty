@@ -10,18 +10,29 @@ public class StagerConfig
     public string PassKey { get; set; } = "";
     public string ChattyWebEndpoint { get; set; } = "";
     public string ChattyHostName { get; set; } = "";
-    public string MySqlAddr { get; set; } = "";
+    public string MySqlAddr { get; set; } = "localhost";
     public ushort MySqlPort { get; set; } = 3306;
-    
-
-
-
+    public string MySqlDatabase { get; set; } = "chatty";
+    public string MySqlUser { get; set; } = "root";
+    public string MySqlPassword { get; set; } = "";
+    public string BackendArtifactUrl { get; set; } = "";
+    public string WebArtifactUrl { get; set; } = "";
+    public string GitHubToken { get; set; } = "";
+    public string DeployRoot { get; set; } = "";
+    public string BackendStartCommand { get; set; } = "node dist/index.js";
+    public string ServerConfigPath { get; set; } = "";
+    public int ServerPort { get; set; } = 5637;
+    public string Motd { get; set; } = "Chatty managed by ChattyStager";
+    public string Info { get; set; } = "Chatty backend service.";
 
     public static async Task Flush(StagerConfig safeNewVersionConfig)
     {
         try
         {
-            var jsonText = JsonSerializer.Serialize(safeNewVersionConfig);
+            var jsonText = JsonSerializer.Serialize(safeNewVersionConfig, new JsonSerializerOptions
+            {
+                WriteIndented = true
+            });
             await File.WriteAllTextAsync(Path.Combine(new DirectoryInfo(Directory.GetCurrentDirectory()).FullName, "ChattyStager.json"), jsonText);
         }
         catch (Exception e)
@@ -101,7 +112,5 @@ public class StagerConfig
             Console.Error.WriteLine(e);
             throw new InvalidOperationException("Unable to create ChattyStager.json");
         }
-        
-        return false;
     } 
 }

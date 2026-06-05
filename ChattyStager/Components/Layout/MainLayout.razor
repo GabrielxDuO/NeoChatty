@@ -1,15 +1,15 @@
 ﻿@inherits LayoutComponentBase
 @inject NavigationManager NavigationManager
 
-<div class="grid grid-cols-4 gap-3 w-full min-h-screen bg-slate-50/50 p-3">
+<div class="grid grid-cols-1 gap-3 w-full min-h-screen bg-slate-50 p-3 lg:grid-cols-5">
     @if (!isInSetupRoute)
     {
-        <div class="w-full bg-slate-100 shadow">
-            
+        <div class="w-full rounded-lg bg-slate-900 text-white shadow lg:col-span-1">
+            <NavMenu />
         </div>
     }
     
-    <div id="main-renderer" class="w-full bg-slate-100 shadow @(isInSetupRoute ? "col-span-4" : "col-span-3")">
+    <div id="main-renderer" class="w-full rounded-lg bg-white shadow @(isInSetupRoute ? "lg:col-span-5" : "lg:col-span-4")">
         @Body
     </div>
 </div>

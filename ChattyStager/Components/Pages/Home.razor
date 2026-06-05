@@ -1,26 +1,112 @@
-﻿@page "/"
+@page "/"
 @rendermode InteractiveServer
 
-@using ChattyStager.Model
 @inject NavigationManager NavigationManager
+@inject StagerConfigService ConfigService
+@inject DashboardService DashboardService
 
-<PageTitle>Home</PageTitle>
+<PageTitle>Dashboard</PageTitle>
 
-<h1>Hello, world!</h1>
+<main class="p-6 space-y-6">
+    <header class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+            <h1 class="text-3xl font-semibold text-slate-950">Chatty Dashboard</h1>
+            <p class="text-slate-500">Runtime, database, and backend service overview.</p>
+        </div>
+        <button type="button" class="btn-primary" @onclick="LoadDashboardAsync" disabled="@loading">
+            @(loading ? "Refreshing..." : "Refresh")
+        </button>
+    </header>
 
-Welcome to your new app.
+    @if (!string.IsNullOrWhiteSpace(error))
+    {
+        <p class="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">@error</p>
+    }
 
+    @if (snapshot == null)
+    {
+        <section class="panel">
+            <p class="text-slate-500">Loading dashboard...</p>
+        </section>
+    }
+    else
+    {
+        <section class="grid grid-cols-1 gap-4 lg:grid-cols-4">
+            <article class="metric">
+                <span>Backend</span>
+                <strong>@(snapshot.BackendRunning ? "Running" : "Stopped")</strong>
+                <small>Managed process state</small>
+            </article>
+            <article class="metric">
+                <span>Messages / 24h</span>
+                <strong>@snapshot.MessagesLast24Hours</strong>
+                <small>Rows created in messages</small>
+            </article>
+            <article class="metric">
+                <span>Registered Users</span>
+                <strong>@snapshot.RegisteredUsers</strong>
+                <small>Total rows in users</small>
+            </article>
+            <article class="metric">
+                <span>CPU</span>
+                <strong>@snapshot.CpuPercent.ToString("0.0")%</strong>
+                <small>Stager process sample</small>
+            </article>
+        </section>
 
-@code{
+        <section class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <article class="panel">
+                <h2 class="section-title">Memory</h2>
+                <p class="metric-line">@snapshot.MemoryUsedMb.ToString("0") MB / @snapshot.MemoryTotalMb.ToString("0") MB</p>
+                <progress class="w-full accent-blue-600" value="@snapshot.MemoryUsedMb" max="@snapshot.MemoryTotalMb"></progress>
+            </article>
+            <article class="panel">
+                <h2 class="section-title">Disk</h2>
+                <p class="metric-line">@snapshot.DiskUsedGb.ToString("0.0") GB / @snapshot.DiskTotalGb.ToString("0.0") GB</p>
+                <progress class="w-full accent-blue-600" value="@snapshot.DiskUsedGb" max="@snapshot.DiskTotalGb"></progress>
+            </article>
+        </section>
+
+        <p class="text-sm text-slate-500">Updated at @snapshot.UpdatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</p>
+    }
+</main>
+
+@code {
+    private StagerConfig? config;
+    private DashboardSnapshot? snapshot;
+    private string error = "";
+    private bool loading;
 
     protected override async Task OnInitializedAsync()
     {
-        if (!(await StagerConfig.HasValidConfig(mustBeSetUp: true)))
+        config = await ConfigService.LoadAsync();
+        if (!config.IsSetUp)
         {
             NavigationManager.NavigateTo("/stager/Setup");
+            return;
         }
-        
-        await base.OnInitializedAsync();
+
+        await LoadDashboardAsync();
     }
 
+    private async Task LoadDashboardAsync()
+    {
+        if (config == null)
+            return;
+
+        loading = true;
+        error = "";
+        try
+        {
+            snapshot = await DashboardService.GetSnapshotAsync(config);
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
 }

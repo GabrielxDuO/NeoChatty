@@ -1,96 +1,284 @@
-﻿@page "/Setup"
+@page "/Setup"
 @rendermode InteractiveServer
 
-@using System.Text.RegularExpressions
-@using ChattyStager.Components.Parts
-@using ChattyStager.Helpers
+@inject NavigationManager NavigationManager
+@inject StagerConfigService ConfigService
+@inject SystemInspectionService InspectionService
+@inject DeploymentService DeploymentService
+@inject DatabaseAdminService DatabaseService
 
 <PageTitle>Setup</PageTitle>
-<div id="setup" class="h-full flex flex-col ">
-    <div id="setup-render" class="flex grow items-center justify-items-center justify-center gap-1.5 h-full">
-        @StepsRender()
-    </div>
-    <div id="setup-controller" class="grid grid-cols-3 gap-1.5 p-5">
-        <Button OnClick="@(() => DoPageChangeCallback(false))">Prev</Button>
-        <div class="bg-slate-50 shadow font-mono grid items-center justify-items-center">
-            <p class="w-full text-center my-auto">
-                @Step / @MaxSteps
-            </p>
-        </div>
-        <Button OnClick="@(() => DoPageChangeCallback())" Disabled="@(!AllowNextStep)">Next</Button>
-    </div>
-</div>
 
-@code{
-    // steps: 0: welcome; 1: check specs; 2: set DB; 3: download builds; 4: basic settings; 5: apply config; 6: ending
-    public int Step { get; set; }
-    public const int MaxSteps = 6;
-    public (string mysqlVersion, string nodeVersion)? Results { get; set; }
-    public bool AllowNextStep = true;
+<main class="min-h-screen bg-slate-50 p-6">
+    <div class="mx-auto flex min-h-[calc(100vh-3rem)] max-w-5xl flex-col gap-5">
+        <header>
+            <h1 class="text-3xl font-semibold text-slate-950">ChattyStager Setup</h1>
+            <p class="text-slate-500">Prepare the host, deploy artifacts, initialize the database, and write backend configuration.</p>
+        </header>
 
-    public void DoPageChangeCallback(bool next = true)
-    {
-        // Console.WriteLine(Step);
-        var temp = Step;
-        if (next && temp != MaxSteps) temp++;
-        else if (temp > 0) temp--;
-        else temp = 0;
-        Step = temp;
-        AllowNextStep = Step switch
+        <nav aria-label="Progress" class="rounded-md bg-white p-3 shadow-sm">
+            <ol class="grid grid-cols-2 gap-2 text-sm md:grid-cols-5">
+                @foreach (var item in steps.Select((label, index) => (label, index)))
+                {
+                    <li class="rounded px-3 py-2 @(Step == item.index ? "bg-blue-600 text-white" : item.index < Step ? "bg-blue-50 text-blue-700" : "bg-slate-100 text-slate-500")">
+                        @(item.index + 1). @item.label
+                    </li>
+                }
+            </ol>
+        </nav>
+
+        @if (!string.IsNullOrWhiteSpace(status))
         {
-            0 or MaxSteps => true,
-            _ => false
-        };
-        StateHasChanged();
+            <p class="rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">@status</p>
+        }
+
+        @if (!string.IsNullOrWhiteSpace(error))
+        {
+            <p class="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">@error</p>
+        }
+
+        <section class="panel grow">
+            @RenderStep()
+        </section>
+
+        <footer class="flex justify-between">
+            <button type="button" class="btn-secondary" @onclick="PrevStep" disabled="@(Step == 0 || busy)">Previous</button>
+            <button type="button" class="btn-primary" @onclick="NextStep" disabled="@busy">@(Step == steps.Length - 1 ? "Open Dashboard" : "Next")</button>
+        </footer>
+    </div>
+</main>
+
+@code {
+    private readonly string[] steps = ["Check Host", "Database", "Artifacts", "Backend Config", "Finish"];
+    private StagerConfig config = new();
+    private RuntimeCheckResult? runtime;
+    private int Step;
+    private bool busy;
+    private string status = "";
+    private string error = "";
+    private string sqlPath = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        config = await ConfigService.LoadAsync();
+        sqlPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "init.sql"));
+        if (!File.Exists(sqlPath))
+            sqlPath = Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), "..", "init.sql"));
+
+        await RunChecksAsync();
     }
 
-    protected RenderFragment StepsRender()
+    private RenderFragment RenderStep()
     {
         return Step switch
         {
-            1 => @<div class="">
-                     <p>
-                         @(Results == null ? "Checking if you have installed right dependencies..." : "Checks done:")
-                     </p>
-                 </div>,
-
-            _ => @<div>
-                     <h1 class="w-full text-center text-3xl font-bold">Welcome to Chatty</h1>
-                     <p class="text-center text-lg">This is the Chatty Stager - Stager will guide you to set up your
-                         Chatty services.</p>
-                 </div>
+            0 => @<div class="space-y-5">
+                <div>
+                    <h2 class="section-title">Host Runtime</h2>
+                    <p class="text-sm text-slate-500">Chatty backend expects Node.js 22 and MySQL 8 or MariaDB 11.</p>
+                </div>
+                <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+                    @RenderRuntimeItem(runtime?.Node)
+                    @RenderRuntimeItem(runtime?.Database)
+                </div>
+                <button type="button" class="btn-secondary" @onclick="RunChecksAsync" disabled="@busy">Run Checks</button>
+            </div>,
+            1 => @<EditForm Model="config" OnValidSubmit="SaveAndTestDatabaseAsync" class="space-y-5">
+                <DataAnnotationsValidator />
+                <h2 class="section-title">Database</h2>
+                <div class="form-grid">
+                    <label>
+                        <span>Host</span>
+                        <InputText name="mysqlHost" class="form-input" @bind-Value="config.MySqlAddr" />
+                    </label>
+                    <label>
+                        <span>Port</span>
+                        <InputNumber name="mysqlPort" class="form-input" @bind-Value="config.MySqlPort" />
+                    </label>
+                    <label>
+                        <span>Database</span>
+                        <InputText name="mysqlDatabase" class="form-input" @bind-Value="config.MySqlDatabase" />
+                    </label>
+                    <label>
+                        <span>User</span>
+                        <InputText name="mysqlUser" class="form-input" @bind-Value="config.MySqlUser" />
+                    </label>
+                    <label>
+                        <span>Password</span>
+                        <InputText name="mysqlPassword" type="password" autocomplete="current-password" class="form-input" @bind-Value="config.MySqlPassword" />
+                    </label>
+                </div>
+                <label>
+                    <span class="mb-1 block text-sm font-medium text-slate-700">SQL init file</span>
+                    <InputText name="sqlPath" class="form-input" @bind-Value="sqlPath" />
+                </label>
+                <div class="flex flex-wrap gap-3">
+                    <button type="submit" class="btn-primary" disabled="@busy">Save and Test Connection</button>
+                    <button type="button" class="btn-secondary" @onclick="InitializeDatabaseAsync" disabled="@busy">Initialize Database</button>
+                </div>
+            </EditForm>,
+            2 => @<EditForm Model="config" OnValidSubmit="DeployArtifactsAsync" class="space-y-5">
+                <h2 class="section-title">Actions Artifacts</h2>
+                <p class="text-sm text-slate-500">Provide direct artifact zip URLs or local zip paths. GitHub token is used as a bearer token when set.</p>
+                <div class="form-grid">
+                    <label>
+                        <span>Backend artifact URL/path</span>
+                        <InputText name="backendArtifactUrl" class="form-input" @bind-Value="config.BackendArtifactUrl" />
+                    </label>
+                    <label>
+                        <span>Web artifact URL/path</span>
+                        <InputText name="webArtifactUrl" class="form-input" @bind-Value="config.WebArtifactUrl" />
+                    </label>
+                    <label>
+                        <span>GitHub token</span>
+                        <InputText name="githubToken" type="password" autocomplete="current-password" class="form-input" @bind-Value="config.GitHubToken" />
+                    </label>
+                    <label>
+                        <span>Deploy root</span>
+                        <InputText name="deployRoot" class="form-input" @bind-Value="config.DeployRoot" />
+                    </label>
+                </div>
+                <button type="submit" class="btn-primary" disabled="@busy">Download and Deploy</button>
+            </EditForm>,
+            3 => @<EditForm Model="config" OnValidSubmit="SaveBackendConfigAsync" class="space-y-5">
+                <h2 class="section-title">Backend Config</h2>
+                <div class="form-grid">
+                    <label>
+                        <span>Server port</span>
+                        <InputNumber name="serverPort" class="form-input" @bind-Value="config.ServerPort" />
+                    </label>
+                    <label>
+                        <span>Backend start command</span>
+                        <InputText name="backendStartCommand" class="form-input" @bind-Value="config.BackendStartCommand" />
+                    </label>
+                    <label>
+                        <span>MOTD</span>
+                        <InputText name="motd" class="form-input" @bind-Value="config.Motd" />
+                    </label>
+                    <label>
+                        <span>Info</span>
+                        <InputText name="info" class="form-input" @bind-Value="config.Info" />
+                    </label>
+                </div>
+                <label class="inline-flex items-center gap-2 text-sm font-medium text-slate-700">
+                    <InputCheckbox name="useHttps" class="h-5 w-5 accent-blue-600" @bind-Value="config.UseHttps" />
+                    Use HTTPS in backend config
+                </label>
+                <button type="submit" class="btn-primary" disabled="@busy">Write Backend Config</button>
+            </EditForm>,
+            _ => @<div class="space-y-5">
+                <h2 class="section-title">Ready</h2>
+                <p class="text-slate-600">Setup is marked complete. Use Settings to start or stop the backend service, and Manage Users to call the database ban procedures.</p>
+                <button type="button" class="btn-primary" @onclick="CompleteSetupAsync">Finish Setup</button>
+            </div>
         };
     }
 
-    protected override async Task OnAfterRenderAsync(bool firstRender)
+    private RenderFragment RenderRuntimeItem(RuntimeCheckItem? item)
     {
-        switch (Step)
+        return @<article class="rounded-md border border-slate-200 bg-slate-50 p-4">
+            <p class="text-sm text-slate-500">@(item?.Name ?? "Checking...")</p>
+            <p class="mt-1 text-xl font-semibold text-slate-950">@(item?.Detected ?? "Not checked")</p>
+            <p class="mt-2 text-sm @(item?.IsSupported == true ? "text-green-700" : "text-red-700")">@(item?.Message ?? "Run checks to inspect this host.")</p>
+            <p class="mt-1 text-xs text-slate-500">Required: @(item?.Required ?? "-")</p>
+        </article>;
+    }
+
+    private async Task RunChecksAsync()
+    {
+        await ExecuteAsync(async () =>
         {
-            case 1:
-                await CheckSpecs();
-                break;
-        }
-        await base.OnAfterRenderAsync(firstRender);
+            runtime = await InspectionService.CheckRuntimeAsync();
+            status = runtime.IsReady ? "Host runtime checks passed." : "Host runtime checks need attention.";
+        });
     }
 
-
-    private async Task CheckSpecs() // check if the host has required stuffs
+    private async Task SaveAndTestDatabaseAsync()
     {
-        Console.WriteLine("Checking specs");
-        
-        const string nodePattern = @"^v\d+\.\d+\.\d+$";
-        Regex nodeRegex = new(nodePattern);
-        
-        using var cmd = new CommandHelper();
-        // checking mysql or mariadb
-        await cmd.StartAsync("mysql -V");
-        var dbResultInfo = cmd.LatestOutputLines[^1].Split("from ")[1].Split(", ")[0];
-        Console.WriteLine($"{dbResultInfo}, {dbResultInfo.Length}");
-
-        await cmd.StartAsync("node --version");
-        var nodeResultInfo = cmd.LatestOutputLines[^1];
-        Console.WriteLine($"{nodeResultInfo}, {nodeRegex.IsMatch(nodeResultInfo)}, {cmd.LatestOutputLines.Count}");
-
+        await ExecuteAsync(async () =>
+        {
+            await ConfigService.SaveAsync(config);
+            await DatabaseService.TestConnectionAsync(config);
+            status = "Database connection succeeded.";
+        });
     }
 
+    private async Task InitializeDatabaseAsync()
+    {
+        await ExecuteAsync(async () =>
+        {
+            await ConfigService.SaveAsync(config);
+            await DeploymentService.InitializeDatabaseAsync(config, DatabaseService, sqlPath);
+            status = "Database initialized.";
+        });
+    }
+
+    private async Task DeployArtifactsAsync()
+    {
+        await ExecuteAsync(async () =>
+        {
+            await ConfigService.SaveAsync(config);
+            if (!string.IsNullOrWhiteSpace(config.BackendArtifactUrl))
+                status = (await DeploymentService.DeployBackendAsync(config)).Message;
+
+            if (!string.IsNullOrWhiteSpace(config.WebArtifactUrl))
+                status = $"{status} {(await DeploymentService.DeployWebAsync(config)).Message}".Trim();
+        });
+    }
+
+    private async Task SaveBackendConfigAsync()
+    {
+        await ExecuteAsync(async () =>
+        {
+            await ConfigService.SaveAsync(config);
+            await ConfigService.WriteServerConfigAsync(config);
+            status = "Backend config was written.";
+        });
+    }
+
+    private async Task CompleteSetupAsync()
+    {
+        await ExecuteAsync(async () =>
+        {
+            config.IsSetUp = true;
+            await ConfigService.SaveAsync(config);
+            NavigationManager.NavigateTo("/stager/");
+        });
+    }
+
+    private void PrevStep()
+    {
+        Step = Math.Max(0, Step - 1);
+        error = "";
+    }
+
+    private void NextStep()
+    {
+        if (Step == steps.Length - 1)
+        {
+            NavigationManager.NavigateTo("/stager/");
+            return;
+        }
+
+        Step++;
+        error = "";
+    }
+
+    private async Task ExecuteAsync(Func<Task> action)
+    {
+        busy = true;
+        error = "";
+        try
+        {
+            await action();
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
 }

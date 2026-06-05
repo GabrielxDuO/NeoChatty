@@ -1,6 +1,154 @@
-﻿@page "/Settings"
-<h3>Settings</h3>
+@page "/Settings"
+@rendermode InteractiveServer
+
+@inject StagerConfigService ConfigService
+@inject BackendProcessService BackendProcess
+
+<PageTitle>Settings</PageTitle>
+
+<main class="p-6 space-y-6">
+    <header>
+        <h1 class="text-3xl font-semibold text-slate-950">Backend Settings</h1>
+        <p class="text-slate-500">Edit Chatty backend configuration and control the managed process.</p>
+    </header>
+
+    @if (!string.IsNullOrWhiteSpace(status))
+    {
+        <p class="rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">@status</p>
+    }
+
+    @if (config == null)
+    {
+        <section class="panel">Loading settings...</section>
+    }
+    else
+    {
+        <section class="panel">
+            <h2 class="section-title">Service Control</h2>
+            <p class="text-sm text-slate-500">@backendStatus.Message @(backendStatus.ProcessId == null ? "" : $"PID {backendStatus.ProcessId}")</p>
+            <div class="mt-4 flex flex-wrap gap-3">
+                <button type="button" class="btn-primary" @onclick="StartBackendAsync" disabled="@backendStatus.IsRunning">Start Backend</button>
+                <button type="button" class="btn-secondary" @onclick="StopBackendAsync" disabled="@(!backendStatus.IsRunning)">Stop Backend</button>
+                <button type="button" class="btn-secondary" @onclick="RefreshStatus">Refresh Status</button>
+            </div>
+        </section>
+
+        <EditForm Model="config" OnValidSubmit="SaveAsync" class="panel space-y-5">
+            <DataAnnotationsValidator />
+            <h2 class="section-title">Configuration File</h2>
+
+            <div class="form-grid">
+                <label>
+                    <span>Backend deploy path</span>
+                    <InputText name="deployRoot" class="form-input" @bind-Value="config.DeployRoot" />
+                </label>
+                <label>
+                    <span>Backend start command</span>
+                    <InputText name="backendStartCommand" class="form-input" @bind-Value="config.BackendStartCommand" />
+                </label>
+                <label>
+                    <span>Server config path</span>
+                    <InputText name="serverConfigPath" class="form-input" @bind-Value="config.ServerConfigPath" />
+                </label>
+                <label>
+                    <span>Server port</span>
+                    <InputNumber name="serverPort" class="form-input" @bind-Value="config.ServerPort" />
+                </label>
+            </div>
+
+            <div class="form-grid">
+                <label>
+                    <span>Database host</span>
+                    <InputText name="mysqlHost" class="form-input" @bind-Value="config.MySqlAddr" />
+                </label>
+                <label>
+                    <span>Database port</span>
+                    <InputNumber name="mysqlPort" class="form-input" @bind-Value="config.MySqlPort" />
+                </label>
+                <label>
+                    <span>Database name</span>
+                    <InputText name="mysqlDatabase" class="form-input" @bind-Value="config.MySqlDatabase" />
+                </label>
+                <label>
+                    <span>Database user</span>
+                    <InputText name="mysqlUser" class="form-input" @bind-Value="config.MySqlUser" />
+                </label>
+                <label>
+                    <span>Database password</span>
+                    <InputText name="mysqlPassword" type="password" autocomplete="current-password" class="form-input" @bind-Value="config.MySqlPassword" />
+                </label>
+            </div>
+
+            <div class="form-grid">
+                <label>
+                    <span>MOTD</span>
+                    <InputText name="motd" class="form-input" @bind-Value="config.Motd" />
+                </label>
+                <label>
+                    <span>Info</span>
+                    <InputText name="info" class="form-input" @bind-Value="config.Info" />
+                </label>
+                <label class="inline-flex items-center gap-2 text-sm font-medium text-slate-700">
+                    <InputCheckbox name="useHttps" class="h-5 w-5 accent-blue-600" @bind-Value="config.UseHttps" />
+                    Use HTTPS in backend config
+                </label>
+            </div>
+
+            <div class="flex flex-wrap gap-3">
+                <button type="submit" class="btn-primary">Save Stager Config</button>
+                <button type="button" class="btn-secondary" @onclick="WriteServerConfigAsync">Write Backend Config</button>
+            </div>
+        </EditForm>
+    }
+</main>
 
 @code {
-    
+    private StagerConfig? config;
+    private BackendStatus backendStatus = new(false, null, null, "Backend status is unknown.");
+    private string status = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        config = await ConfigService.LoadAsync();
+        RefreshStatus();
+    }
+
+    private async Task SaveAsync()
+    {
+        if (config == null)
+            return;
+
+        await ConfigService.SaveAsync(config);
+        status = "Stager configuration saved.";
+    }
+
+    private async Task WriteServerConfigAsync()
+    {
+        if (config == null)
+            return;
+
+        await ConfigService.WriteServerConfigAsync(config);
+        status = $"Backend config written to {ConfigService.GetServerConfigPath(config)}";
+    }
+
+    private async Task StartBackendAsync()
+    {
+        if (config == null)
+            return;
+
+        await ConfigService.WriteServerConfigAsync(config);
+        backendStatus = await BackendProcess.StartAsync(config);
+        status = backendStatus.Message;
+    }
+
+    private async Task StopBackendAsync()
+    {
+        backendStatus = await BackendProcess.StopAsync();
+        status = backendStatus.Message;
+    }
+
+    private void RefreshStatus()
+    {
+        backendStatus = BackendProcess.GetStatus();
+    }
 }

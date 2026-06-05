@@ -2,6 +2,7 @@
 
 # dependencies
 node_modules/
+.pnpm-store/
 
 # Expo
 .expo/
@@ -45,6 +46,10 @@ yarn-error.*
 
 # upload local test files
 /uploads
+/.local-runtime
+/ChattyStager.json
+/ChattyStager/ChattyStager.json
+/appsettings.mainListener.json
 
 llm.*
 

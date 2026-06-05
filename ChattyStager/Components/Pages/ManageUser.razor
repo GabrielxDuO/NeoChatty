@@ -1,6 +1,133 @@
-﻿@page "/ManageUser"
-<h3>ManageUser</h3>
+@page "/ManageUser"
+@rendermode InteractiveServer
+
+@inject StagerConfigService ConfigService
+@inject DatabaseAdminService DatabaseService
+
+<PageTitle>Manage Users</PageTitle>
+
+<main class="p-6 space-y-6">
+    <header>
+        <h1 class="text-3xl font-semibold text-slate-950">Manage Users</h1>
+        <p class="text-slate-500">Search users and call database stored procedures for ban or unban.</p>
+    </header>
+
+    @if (!string.IsNullOrWhiteSpace(status))
+    {
+        <p class="rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">@status</p>
+    }
+
+    @if (!string.IsNullOrWhiteSpace(error))
+    {
+        <p class="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">@error</p>
+    }
+
+    <section class="panel">
+        <search>
+            <form method="get" @onsubmit="SearchAsync" @onsubmit:preventDefault>
+                <label class="block">
+                    <span class="mb-1 block text-sm font-medium text-slate-700">Search by ID, username, or display name</span>
+                    <input name="query" class="form-input" type="search" @bind="query" />
+                </label>
+                <button type="submit" class="btn-primary mt-3" disabled="@busy">Search</button>
+            </form>
+        </search>
+    </section>
+
+    <section class="panel overflow-x-auto">
+        <h2 class="section-title">Users</h2>
+        @if (users.Count == 0)
+        {
+            <p class="text-sm text-slate-500">No users loaded.</p>
+        }
+        else
+        {
+            <table class="w-full min-w-[760px] text-left text-sm">
+                <thead>
+                    <tr class="border-b border-slate-200 text-slate-500">
+                        <th class="py-2 pr-4">ID</th>
+                        <th class="py-2 pr-4">Username</th>
+                        <th class="py-2 pr-4">Display Name</th>
+                        <th class="py-2 pr-4">Created</th>
+                        <th class="py-2 pr-4">Status</th>
+                        <th class="py-2 pr-4">Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var user in users)
+                    {
+                        <tr class="border-b border-slate-100">
+                            <td class="py-3 pr-4">@user.Id</td>
+                            <td class="py-3 pr-4">@user.Username</td>
+                            <td class="py-3 pr-4">@user.DisplayName</td>
+                            <td class="py-3 pr-4">@user.CreatedAt.ToString("yyyy-MM-dd HH:mm")</td>
+                            <td class="py-3 pr-4">@(user.Disabled ? "Banned" : "Active")</td>
+                            <td class="py-3 pr-4">
+                                @if (user.Disabled)
+                                {
+                                    <button type="button" class="btn-secondary" @onclick="() => SetBanAsync(user, false)" disabled="@busy">Unban</button>
+                                }
+                                else
+                                {
+                                    <button type="button" class="btn-danger" @onclick="() => SetBanAsync(user, true)" disabled="@busy">Ban</button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    </section>
+</main>
 
 @code {
-    
+    private StagerConfig config = new();
+    private List<UserModel> users = [];
+    private string query = "";
+    private string status = "";
+    private string error = "";
+    private bool busy;
+
+    protected override async Task OnInitializedAsync()
+    {
+        config = await ConfigService.LoadAsync();
+        await SearchAsync();
+    }
+
+    private async Task SearchAsync()
+    {
+        await ExecuteAsync(async () =>
+        {
+            users = await DatabaseService.SearchUsersAsync(config, query);
+            status = $"Loaded {users.Count} users.";
+        });
+    }
+
+    private async Task SetBanAsync(UserModel user, bool disabled)
+    {
+        await ExecuteAsync(async () =>
+        {
+            await DatabaseService.SetUserBanAsync(config, user.Id, disabled);
+            status = $"{user.Username} was {(disabled ? "banned" : "unbanned")}.";
+            await SearchAsync();
+        });
+    }
+
+    private async Task ExecuteAsync(Func<Task> action)
+    {
+        busy = true;
+        error = "";
+        try
+        {
+            await action();
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
 }
