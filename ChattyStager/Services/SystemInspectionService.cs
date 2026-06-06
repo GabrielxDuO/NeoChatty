@@ -7,19 +7,11 @@ using System.Text.RegularExpressions;
 
 public class SystemInspectionService
 {
-    private readonly DatabaseSetupService _databaseService;
-
-    public SystemInspectionService(DatabaseSetupService databaseService)
-    {
-        _databaseService = databaseService;
-    }
-
     public async Task<RuntimeCheckResult> CheckRuntimeAsync(StagerConfig config)
     {
         var node = await CheckNodeAsync();
         var databaseClient = await CheckDatabaseClientAsync();
-        var databaseConnection = await _databaseService.TestConnectionAsync(config);
-        return new RuntimeCheckResult(node, databaseClient, databaseConnection);
+        return new RuntimeCheckResult(node, databaseClient);
     }
 
     private static async Task<RuntimeCheckItem> CheckNodeAsync()
@@ -38,22 +30,22 @@ public class SystemInspectionService
                 continue;
 
             var version = result.Output.Trim();
-            var supported = IsNode22(version);
+            var supported = IsNode22OrNewer(version);
             if (supported)
             {
-                return new RuntimeCheckItem("Node.js", "22.x", version, result.Path, true, true, "Node.js 22 is available.");
+                return new RuntimeCheckItem("Node.js", "22+", version, result.Path, true, true, "Node.js 22 or newer is available.");
             }
         }
 
         var fallback = await TryRunAsync("node", "--version");
         return new RuntimeCheckItem(
             "Node.js",
-            "22.x",
+            "22+",
             fallback.Success ? fallback.Output.Trim() : fallback.Message,
             fallback.Path,
             fallback.Success,
             false,
-            "Node.js 22 is required.");
+            "Node.js 22 or newer is required.");
     }
 
     private static async Task<RuntimeCheckItem> CheckDatabaseClientAsync()
@@ -76,24 +68,24 @@ public class SystemInspectionService
             var lower = detected.ToLowerInvariant();
             var isMaria = lower.Contains("mariadb");
             var match = Regex.Match(detected, @"(?<major>\d+)\.(?<minor>\d+)\.");
-            var supported = match.Success && int.Parse(match.Groups["major"].Value) == (isMaria ? 11 : 8);
+            var supported = match.Success && int.Parse(match.Groups["major"].Value) >= (isMaria ? 11 : 8);
             return new RuntimeCheckItem(
                 "Database CLI",
-                "MySQL 8.x or MariaDB 11.x",
+                "MySQL 8+ or MariaDB 11+",
                 detected,
                 result.Path,
                 true,
                 supported,
-                supported ? "Supported database client detected." : "Install MySQL 8 or MariaDB 11.");
+                supported ? "Supported database client detected." : "Install MySQL 8 or newer, or MariaDB 11 or newer.");
         }
 
-        return new RuntimeCheckItem("Database CLI", "MySQL 8.x or MariaDB 11.x", "Not found", "", false, false, "mysql or mariadb command is unavailable.");
+        return new RuntimeCheckItem("Database CLI", "MySQL 8+ or MariaDB 11+", "Not found", "", false, false, "mysql or mariadb command is unavailable.");
     }
 
-    private static bool IsNode22(string version)
+    private static bool IsNode22OrNewer(string version)
     {
         var match = Regex.Match(version.Trim(), @"v(?<major>\d+)\.");
-        return match.Success && int.Parse(match.Groups["major"].Value) == 22;
+        return match.Success && int.Parse(match.Groups["major"].Value) >= 22;
     }
 
     private static async Task<(bool Success, string Output, string Message, string Path)> TryRunAsync(string fileName, string arguments)

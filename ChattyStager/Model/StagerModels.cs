@@ -38,10 +38,9 @@ public record RuntimeCheckItem(
 
 public record RuntimeCheckResult(
     RuntimeCheckItem Node,
-    RuntimeCheckItem DatabaseClient,
-    RuntimeCheckItem DatabaseConnection)
+    RuntimeCheckItem DatabaseClient)
 {
-    public bool IsReady => Node.IsSupported && DatabaseClient.IsSupported && DatabaseConnection.IsSupported;
+    public bool IsReady => Node.IsSupported && DatabaseClient.IsSupported;
 }
 
 public record BackendRuntimeStatus(

@@ -161,7 +161,14 @@
         await ExecuteAsync(async () =>
         {
             await ConfigService.SaveAsync(config);
-            status = "Stager configuration saved.";
+            if (Directory.Exists(config.BackendWorkingDirectory))
+            {
+                await ConfigService.WriteServerConfigAsync(config);
+                status = $"Stager configuration saved and backend config written to {config.ServerConfigPath}.";
+                return;
+            }
+
+            status = "Stager configuration saved. Backend config will be written after backend artifact deployment.";
         });
     }
 

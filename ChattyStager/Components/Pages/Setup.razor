@@ -82,12 +82,11 @@
             0 => @<div class="space-y-5">
                 <div>
                     <h2 class="section-title">Runtime Checks</h2>
-                    <p class="text-sm text-slate-500">Node.js 22, database client, and database connection must pass before deployment.</p>
+                    <p class="text-sm text-slate-500">Node.js 22 or newer and a supported database client must pass before setup. Database connection is tested during initialization.</p>
                 </div>
-                <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
+                <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
                     @RenderRuntimeItem(runtime?.Node)
                     @RenderRuntimeItem(runtime?.DatabaseClient)
-                    @RenderRuntimeItem(runtime?.DatabaseConnection)
                 </div>
                 <button type="button" class="btn-secondary" @onclick="RunChecksAsync" disabled="@busy">Run Checks</button>
             </div>,
