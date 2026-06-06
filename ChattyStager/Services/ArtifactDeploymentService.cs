@@ -62,7 +62,7 @@ public class ArtifactDeploymentService
             var targetPath = await RunStepAsync(steps, "Publish web artifact", logs, () =>
             {
                 var target = _configService.GetWebDeployPath(config);
-                ReplaceDirectory(webRoot, target);
+                PublishWebRoot(webRoot, target);
                 return Task.FromResult(target);
             });
 
@@ -106,7 +106,7 @@ public class ArtifactDeploymentService
             var target = RunStep(steps, "Publish web artifact", logs, () =>
             {
                 var publishTarget = _configService.GetWebDeployPath(config);
-                ReplaceDirectory(webRoot, publishTarget);
+                PublishWebRoot(webRoot, publishTarget);
                 return publishTarget;
             });
             return new DeploymentResult(true, "Web zip deployed.", target, steps, logs);
@@ -276,6 +276,31 @@ public class ArtifactDeploymentService
         Directory.Move(staging, target);
         if (Directory.Exists(backup))
             Directory.Delete(backup, recursive: true);
+    }
+
+    private static void PublishWebRoot(string source, string target)
+    {
+        Directory.CreateDirectory(target);
+        foreach (var directory in Directory.GetDirectories(target))
+        {
+            if (IsProtectedWebRootEntry(Path.GetFileName(directory)))
+                continue;
+            Directory.Delete(directory, recursive: true);
+        }
+
+        foreach (var file in Directory.GetFiles(target))
+        {
+            if (IsProtectedWebRootEntry(Path.GetFileName(file)))
+                continue;
+            File.Delete(file);
+        }
+
+        CopyDirectory(source, target);
+    }
+
+    private static bool IsProtectedWebRootEntry(string name)
+    {
+        return name is ".gitignore" or "css" or "favicon.png";
     }
 
     private static void MoveOrCopyDirectory(string source, string target)

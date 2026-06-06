@@ -84,7 +84,7 @@ public class StagerConfigService
 
     public string GetWebDeployPath(StagerConfig config)
     {
-        return Path.Combine(_environment.WebRootPath, "chatty-web");
+        return _environment.WebRootPath;
     }
 
     public string GetArtifactCachePath(StagerConfig config)
