@@ -17,7 +17,7 @@ public class StagerConfig
     public string MySqlPassword { get; set; } = "";
     public string GitHubOwner { get; set; } = "";
     public string GitHubRepo { get; set; } = "";
-    public string GitHubWorkflow { get; set; } = "";
+    public string GitHubWorkflow { get; set; } = "build.yml";
     public string GitHubBranch { get; set; } = "main";
     public string BackendArtifactName { get; set; } = "backend";
     public string WebArtifactName { get; set; } = "web";

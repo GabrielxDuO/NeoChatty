@@ -124,7 +124,7 @@
             </EditForm>,
             2 => @<EditForm Model="config" OnValidSubmit="DeployArtifactsAsync" class="space-y-5">
                 <h2 class="section-title">GitHub Actions Artifacts</h2>
-                <p class="text-sm text-slate-500">Downloads artifacts from the latest successful workflow run. Token is read from this config or GITHUB_TOKEN.</p>
+                <p class="text-sm text-slate-500">Downloads artifacts from the latest successful workflow run. Public repositories do not need a token; use one only for private repositories or stricter API limits.</p>
                 <div class="form-grid">
                     <label>
                         <span>Owner</span>
@@ -151,7 +151,7 @@
                         <InputText name="webArtifactName" class="form-input" @bind-Value="config.WebArtifactName" />
                     </label>
                     <label>
-                        <span>GitHub token</span>
+                        <span>GitHub token (optional)</span>
                         <InputText name="githubToken" type="password" autocomplete="current-password" class="form-input" @bind-Value="config.GitHubToken" />
                     </label>
                     <label>
