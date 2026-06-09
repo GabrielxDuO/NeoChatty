@@ -19,8 +19,8 @@ public class StagerConfig
     public string GitHubRepo { get; set; } = "";
     public string GitHubWorkflow { get; set; } = "build.yml";
     public string GitHubBranch { get; set; } = "main";
-    public string BackendArtifactName { get; set; } = "backend";
-    public string WebArtifactName { get; set; } = "web";
+    public string BackendArtifactName { get; set; } = "server-dist";
+    public string WebArtifactName { get; set; } = "webapp-dist";
     public string GitHubToken { get; set; } = "";
     public string DeployRoot { get; set; } = "";
     public string BackendWorkingDirectory { get; set; } = "";

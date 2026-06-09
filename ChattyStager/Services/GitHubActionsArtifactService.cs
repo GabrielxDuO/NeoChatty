@@ -20,7 +20,7 @@ public class GitHubActionsArtifactService
         CancellationToken cancellationToken = default)
     {
         EnsureGitHubConfig(config);
-        logs.Add(new OperationLogEntry(DateTimeOffset.Now, "info", $"Finding artifact `{artifactName}` in latest successful workflow run."));
+        logs.Add(new OperationLogEntry(DateTimeOffset.Now, "info", $"Finding artifact `{artifactName}` in the latest successful [run-build] workflow run."));
 
         var workflow = Uri.EscapeDataString(config.GitHubWorkflow);
         var branchQuery = string.IsNullOrWhiteSpace(config.GitHubBranch)
@@ -34,6 +34,9 @@ public class GitHubActionsArtifactService
 
         foreach (var run in runs)
         {
+            if (!IsRunBuildCommit(run))
+                continue;
+
             var artifactsUrl = run.GetProperty("artifacts_url").GetString() ?? "";
             if (string.IsNullOrWhiteSpace(artifactsUrl))
                 continue;
@@ -58,7 +61,7 @@ public class GitHubActionsArtifactService
             }
         }
 
-        throw new InvalidOperationException($"Artifact `{artifactName}` was not found in recent successful workflow runs.");
+        throw new InvalidOperationException($"Artifact `{artifactName}` was not found in recent successful [run-build] workflow runs.");
     }
 
     public async Task<string> DownloadArtifactAsync(
@@ -101,6 +104,19 @@ public class GitHubActionsArtifactService
         if (!string.IsNullOrWhiteSpace(config.GitHubToken))
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", config.GitHubToken);
         return request;
+    }
+
+    private static bool IsRunBuildCommit(JsonElement run)
+    {
+        if (!run.TryGetProperty("head_commit", out var commit) ||
+            commit.ValueKind == JsonValueKind.Null ||
+            !commit.TryGetProperty("message", out var messageElement))
+        {
+            return false;
+        }
+
+        var message = messageElement.GetString() ?? "";
+        return message.StartsWith("[run-build]", StringComparison.OrdinalIgnoreCase);
     }
 
     private static void EnsureGitHubConfig(StagerConfig config)

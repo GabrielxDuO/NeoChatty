@@ -39,11 +39,11 @@ public class StagerConfigService
         if (string.IsNullOrWhiteSpace(config.DeployRoot))
             config.DeployRoot = Path.Combine(_environment.ContentRootPath, "deploy");
 
-        if (string.IsNullOrWhiteSpace(config.BackendWorkingDirectory))
-            config.BackendWorkingDirectory = GetBackendDeployPath(config);
+        config.BackendArtifactName = "server-dist";
+        config.WebArtifactName = "webapp-dist";
 
-        if (string.IsNullOrWhiteSpace(config.ServerConfigPath))
-            config.ServerConfigPath = Path.Combine(config.BackendWorkingDirectory, "chatty.server.config.js");
+        config.BackendWorkingDirectory = GetBackendDeployPath(config);
+        config.ServerConfigPath = Path.Combine(config.BackendWorkingDirectory, "chatty.server.config.js");
 
         if (string.IsNullOrWhiteSpace(config.LogDirectory))
             config.LogDirectory = Path.Combine(config.DeployRoot, "logs");
@@ -93,7 +93,7 @@ public class StagerConfigService
 
     public string GetBackendDeployPath(StagerConfig config)
     {
-        return Path.Combine(config.DeployRoot, "backend");
+        return Path.Combine(_environment.ContentRootPath, "chatty-server");
     }
 
     public string GetWebDeployPath(StagerConfig config)

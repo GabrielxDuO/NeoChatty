@@ -122,53 +122,33 @@
                 <button type="submit" class="btn-primary" disabled="@busy">Initialize and Validate Database</button>
                 @RenderDeploymentResult(databaseResult)
             </EditForm>,
-            2 => @<EditForm Model="config" OnValidSubmit="DeployArtifactsAsync" class="space-y-5">
+            2 => @<div class="space-y-5">
                 <h2 class="section-title">GitHub Actions Artifacts</h2>
-                <p class="text-sm text-slate-500">Downloads artifacts from the latest successful workflow run. Public repositories do not need a token; use one only for private repositories or stricter API limits.</p>
-                <div class="form-grid">
-                    <label>
-                        <span>Owner</span>
-                        <InputText name="githubOwner" class="form-input" @bind-Value="config.GitHubOwner" />
-                    </label>
-                    <label>
-                        <span>Repo</span>
-                        <InputText name="githubRepo" class="form-input" @bind-Value="config.GitHubRepo" />
-                    </label>
-                    <label>
-                        <span>Workflow file or ID</span>
-                        <InputText name="githubWorkflow" class="form-input" @bind-Value="config.GitHubWorkflow" />
-                    </label>
-                    <label>
-                        <span>Branch</span>
-                        <InputText name="githubBranch" class="form-input" @bind-Value="config.GitHubBranch" />
-                    </label>
-                    <label>
-                        <span>Backend artifact name</span>
-                        <InputText name="backendArtifactName" class="form-input" @bind-Value="config.BackendArtifactName" />
-                    </label>
-                    <label>
-                        <span>Web artifact name</span>
-                        <InputText name="webArtifactName" class="form-input" @bind-Value="config.WebArtifactName" />
-                    </label>
-                    <label>
-                        <span>GitHub token (optional)</span>
-                        <InputText name="githubToken" type="password" autocomplete="current-password" class="form-input" @bind-Value="config.GitHubToken" />
-                    </label>
-                    <label>
-                        <span>Deploy root</span>
-                        <InputText name="deployRoot" class="form-input" @bind-Value="config.DeployRoot" />
-                    </label>
-                </div>
-                <label class="inline-flex items-center gap-2 text-sm font-medium text-slate-700">
-                    <InputCheckbox name="installProdDeps" class="h-5 w-5 accent-blue-600" @bind-Value="config.InstallBackendProductionDependencies" />
-                    Install backend production dependencies when node_modules is missing
-                </label>
-                <button type="submit" class="btn-primary" disabled="@busy">Download and Deploy Artifacts</button>
+                <p class="text-sm text-slate-500">Downloads from the public repository's latest successful <code>build.yml</code> workflow run whose commit message starts with <code>[run-build]</code>.</p>
+                <dl class="grid grid-cols-1 gap-3 rounded-md border border-slate-200 bg-slate-50 p-4 text-sm md:grid-cols-2">
+                    <div>
+                        <dt class="text-slate-500">Repository</dt>
+                        <dd class="font-mono text-slate-950">@config.GitHubOwner/@config.GitHubRepo</dd>
+                    </div>
+                    <div>
+                        <dt class="text-slate-500">Workflow</dt>
+                        <dd class="font-mono text-slate-950">@config.GitHubWorkflow</dd>
+                    </div>
+                    <div>
+                        <dt class="text-slate-500">Server artifact</dt>
+                        <dd class="font-mono text-slate-950">server-dist -> @config.BackendWorkingDirectory</dd>
+                    </div>
+                    <div>
+                        <dt class="text-slate-500">Webapp artifact</dt>
+                        <dd class="font-mono text-slate-950">webapp-dist -> @ConfigService.GetWebDeployPath(config)</dd>
+                    </div>
+                </dl>
+                <button type="button" class="btn-primary" @onclick="DeployArtifactsAsync" disabled="@busy">Download and Deploy Latest Build</button>
                 <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
                     @RenderDeploymentResult(backendDeployResult)
                     @RenderDeploymentResult(webDeployResult)
                 </div>
-            </EditForm>,
+            </div>,
             3 => @<EditForm Model="config" OnValidSubmit="SaveBackendConfigAsync" class="space-y-5">
                 <h2 class="section-title">Backend Config</h2>
                 <div class="form-grid">
@@ -271,6 +251,7 @@
     {
         await ExecuteAsync(async () =>
         {
+            ConfigService.ApplyDefaults(config);
             await ConfigService.SaveAsync(config);
             backendDeployResult = await ArtifactDeployment.DeployBackendFromGitHubAsync(config);
             if (!backendDeployResult.Success)

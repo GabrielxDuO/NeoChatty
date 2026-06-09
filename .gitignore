@@ -49,6 +49,7 @@ yarn-error.*
 /.local-runtime
 /ChattyStager.json
 /ChattyStager/ChattyStager.json
+/ChattyStager/chatty-server/
 /appsettings.mainListener.json
 
 llm.*

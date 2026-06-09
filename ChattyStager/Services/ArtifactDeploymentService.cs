@@ -66,6 +66,12 @@ public class ArtifactDeploymentService
                 return Task.FromResult(target);
             });
 
+            await RunStepAsync(steps, "Verify webapp index", logs, () =>
+            {
+                VerifyPublishedWebRoot(targetPath);
+                return Task.FromResult(true);
+            });
+
             return new DeploymentResult(true, "Web artifact deployed.", targetPath, steps, logs);
         }
         catch (Exception ex)
@@ -108,6 +114,11 @@ public class ArtifactDeploymentService
                 var publishTarget = _configService.GetWebDeployPath(config);
                 PublishWebRoot(webRoot, publishTarget);
                 return publishTarget;
+            });
+            RunStep(steps, "Verify webapp index", logs, () =>
+            {
+                VerifyPublishedWebRoot(target);
+                return true;
             });
             return new DeploymentResult(true, "Web zip deployed.", target, steps, logs);
         }
@@ -296,6 +307,12 @@ public class ArtifactDeploymentService
         }
 
         CopyDirectory(source, target);
+    }
+
+    private static void VerifyPublishedWebRoot(string target)
+    {
+        if (!File.Exists(Path.Combine(target, "index.html")))
+            throw new InvalidOperationException("Web artifact deployment failed because wwwroot/index.html was not found.");
     }
 
     private static bool IsProtectedWebRootEntry(string name)
