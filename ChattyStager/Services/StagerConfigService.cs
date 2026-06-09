@@ -3,7 +3,6 @@ namespace ChattyStager.Services;
 using ChattyStager.Model;
 using Microsoft.AspNetCore.Hosting;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 
 public class StagerConfigService
 {
@@ -39,9 +38,6 @@ public class StagerConfigService
         if (string.IsNullOrWhiteSpace(config.DeployRoot))
             config.DeployRoot = Path.Combine(_environment.ContentRootPath, "deploy");
 
-        config.BackendArtifactName = "server-dist";
-        config.WebArtifactName = "webapp-dist";
-
         config.BackendWorkingDirectory = GetBackendDeployPath(config);
         config.ServerConfigPath = Path.Combine(config.BackendWorkingDirectory, "chatty.server.config.js");
 
@@ -72,23 +68,6 @@ public class StagerConfigService
         if (string.IsNullOrWhiteSpace(config.BackendArguments))
             config.BackendArguments = "dist/index.js";
 
-        if (string.IsNullOrWhiteSpace(config.GitHubWorkflow))
-            config.GitHubWorkflow = "build.yml";
-
-        if (string.IsNullOrWhiteSpace(config.GitHubOwner) || string.IsNullOrWhiteSpace(config.GitHubRepo))
-        {
-            var inferred = TryInferGitHubRepository();
-            if (inferred != null)
-            {
-                config.GitHubOwner = string.IsNullOrWhiteSpace(config.GitHubOwner) ? inferred.Value.Owner : config.GitHubOwner;
-                config.GitHubRepo = string.IsNullOrWhiteSpace(config.GitHubRepo) ? inferred.Value.Repo : config.GitHubRepo;
-            }
-        }
-
-        if (string.IsNullOrWhiteSpace(config.GitHubToken))
-        {
-            config.GitHubToken = Environment.GetEnvironmentVariable("GITHUB_TOKEN") ?? "";
-        }
     }
 
     public string GetBackendDeployPath(StagerConfig config)
@@ -160,17 +139,4 @@ public class StagerConfigService
         await File.WriteAllTextAsync(config.ServerConfigPath, BuildServerConfig(config));
     }
 
-    private (string Owner, string Repo)? TryInferGitHubRepository()
-    {
-        var gitConfigPath = Path.Combine(_environment.ContentRootPath, "..", ".git", "config");
-        if (!File.Exists(gitConfigPath))
-            return null;
-
-        var gitConfig = File.ReadAllText(gitConfigPath);
-        var match = Regex.Match(gitConfig, @"url\s*=\s*(?:git@github\.com:|https://github\.com/)(?<owner>[^/\s]+)/(?<repo>[^\s/]+?)(?:\.git)?(?:\s|$)", RegexOptions.IgnoreCase);
-        if (!match.Success)
-            return null;
-
-        return (match.Groups["owner"].Value, match.Groups["repo"].Value);
-    }
 }

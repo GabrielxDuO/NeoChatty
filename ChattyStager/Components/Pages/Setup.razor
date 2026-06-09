@@ -124,23 +124,15 @@
             </EditForm>,
             2 => @<div class="space-y-5">
                 <h2 class="section-title">GitHub Actions Artifacts</h2>
-                <p class="text-sm text-slate-500">Downloads from the public repository's latest successful <code>build.yml</code> workflow run whose commit message starts with <code>[run-build]</code>.</p>
+                <p class="text-sm text-slate-500">Downloads the latest matching public artifacts from <code>@GitHubArtifactConstants.RepositoryArtifactsUrl</code>.</p>
                 <dl class="grid grid-cols-1 gap-3 rounded-md border border-slate-200 bg-slate-50 p-4 text-sm md:grid-cols-2">
                     <div>
-                        <dt class="text-slate-500">Repository</dt>
-                        <dd class="font-mono text-slate-950">@config.GitHubOwner/@config.GitHubRepo</dd>
-                    </div>
-                    <div>
-                        <dt class="text-slate-500">Workflow</dt>
-                        <dd class="font-mono text-slate-950">@config.GitHubWorkflow</dd>
-                    </div>
-                    <div>
                         <dt class="text-slate-500">Server artifact</dt>
-                        <dd class="font-mono text-slate-950">server-dist -> @config.BackendWorkingDirectory</dd>
+                        <dd class="font-mono text-slate-950">@GitHubArtifactConstants.ServerArtifactName -> @config.BackendWorkingDirectory</dd>
                     </div>
                     <div>
                         <dt class="text-slate-500">Webapp artifact</dt>
-                        <dd class="font-mono text-slate-950">webapp-dist -> @ConfigService.GetWebDeployPath(config)</dd>
+                        <dd class="font-mono text-slate-950">@GitHubArtifactConstants.WebappArtifactName -> @ConfigService.GetWebDeployPath(config)</dd>
                     </div>
                 </dl>
                 <button type="button" class="btn-primary" @onclick="DeployArtifactsAsync" disabled="@busy">Download and Deploy Latest Build</button>
@@ -253,10 +245,11 @@
         {
             ConfigService.ApplyDefaults(config);
             await ConfigService.SaveAsync(config);
-            backendDeployResult = await ArtifactDeployment.DeployBackendFromGitHubAsync(config);
+            var deployment = await ArtifactDeployment.DeployBuildArtifactsFromGitHubAsync(config);
+            backendDeployResult = deployment.Backend;
+            webDeployResult = deployment.Webapp;
             if (!backendDeployResult.Success)
                 throw new InvalidOperationException(backendDeployResult.Message);
-            webDeployResult = await ArtifactDeployment.DeployWebFromGitHubAsync(config);
             if (!webDeployResult.Success)
                 throw new InvalidOperationException(webDeployResult.Message);
             await ConfigService.SaveAsync(config);

@@ -19,49 +19,48 @@ public class GitHubActionsArtifactService
         List<OperationLogEntry> logs,
         CancellationToken cancellationToken = default)
     {
-        EnsureGitHubConfig(config);
-        logs.Add(new OperationLogEntry(DateTimeOffset.Now, "info", $"Finding artifact `{artifactName}` in the latest successful [run-build] workflow run."));
+        var artifacts = await FindLatestBuildArtifactsAsync(logs, cancellationToken);
+        if (string.Equals(artifactName, GitHubArtifactConstants.ServerArtifactName, StringComparison.OrdinalIgnoreCase))
+            return artifacts.Server;
+        if (string.Equals(artifactName, GitHubArtifactConstants.WebappArtifactName, StringComparison.OrdinalIgnoreCase))
+            return artifacts.Webapp;
+        throw new InvalidOperationException($"Unsupported artifact `{artifactName}`.");
+    }
 
-        var workflow = Uri.EscapeDataString(config.GitHubWorkflow);
-        var branchQuery = string.IsNullOrWhiteSpace(config.GitHubBranch)
-            ? ""
-            : $"&branch={Uri.EscapeDataString(config.GitHubBranch)}";
-        var runsUrl = $"https://api.github.com/repos/{config.GitHubOwner}/{config.GitHubRepo}/actions/workflows/{workflow}/runs?status=success&per_page=10{branchQuery}";
-        using var runsDoc = await GetJsonAsync(config, runsUrl, cancellationToken);
-        var runs = runsDoc.RootElement.GetProperty("workflow_runs").EnumerateArray().ToList();
-        if (runs.Count == 0)
-            throw new InvalidOperationException("No successful workflow runs were found.");
+    public async Task<(ArtifactInfo Server, ArtifactInfo Webapp)> FindLatestBuildArtifactsAsync(
+        List<OperationLogEntry> logs,
+        CancellationToken cancellationToken = default)
+    {
+        logs.Add(new OperationLogEntry(DateTimeOffset.Now, "info", $"Finding latest `{GitHubArtifactConstants.ServerArtifactName}` and `{GitHubArtifactConstants.WebappArtifactName}` artifacts from public repository artifacts."));
 
-        foreach (var run in runs)
+        using var artifactsDoc = await GetJsonAsync(GitHubArtifactConstants.RepositoryArtifactsUrl, cancellationToken);
+        ArtifactInfo? server = null;
+        ArtifactInfo? webapp = null;
+
+        foreach (var artifact in artifactsDoc.RootElement.GetProperty("artifacts").EnumerateArray())
         {
-            if (!IsRunBuildCommit(run))
-                continue;
-
-            var artifactsUrl = run.GetProperty("artifacts_url").GetString() ?? "";
-            if (string.IsNullOrWhiteSpace(artifactsUrl))
-                continue;
-
-            using var artifactsDoc = await GetJsonAsync(config, artifactsUrl, cancellationToken);
-            foreach (var artifact in artifactsDoc.RootElement.GetProperty("artifacts").EnumerateArray())
+            var name = artifact.GetProperty("name").GetString() ?? "";
+            if (server == null && string.Equals(name, GitHubArtifactConstants.ServerArtifactName, StringComparison.OrdinalIgnoreCase))
             {
-                var name = artifact.GetProperty("name").GetString() ?? "";
-                if (!string.Equals(name, artifactName, StringComparison.OrdinalIgnoreCase))
-                    continue;
-
-                var info = new ArtifactInfo(
-                    artifact.GetProperty("id").GetInt64(),
-                    name,
-                    artifact.GetProperty("archive_download_url").GetString() ?? "",
-                    artifact.TryGetProperty("size_in_bytes", out var size) ? size.GetInt64() : 0,
-                    artifact.GetProperty("created_at").GetDateTimeOffset(),
-                    artifact.GetProperty("expires_at").GetDateTimeOffset());
-
-                logs.Add(new OperationLogEntry(DateTimeOffset.Now, "info", $"Matched artifact `{info.Name}` ({info.SizeInBytes} bytes)."));
-                return info;
+                server = CreateArtifactInfo(artifact);
+                logs.Add(new OperationLogEntry(DateTimeOffset.Now, "info", $"Matched artifact `{server.Name}` ({server.SizeInBytes} bytes)."));
             }
+            else if (webapp == null && string.Equals(name, GitHubArtifactConstants.WebappArtifactName, StringComparison.OrdinalIgnoreCase))
+            {
+                webapp = CreateArtifactInfo(artifact);
+                logs.Add(new OperationLogEntry(DateTimeOffset.Now, "info", $"Matched artifact `{webapp.Name}` ({webapp.SizeInBytes} bytes)."));
+            }
+
+            if (server != null && webapp != null)
+                return (server, webapp);
         }
 
-        throw new InvalidOperationException($"Artifact `{artifactName}` was not found in recent successful [run-build] workflow runs.");
+        var missing = string.Join(", ", new[]
+        {
+            server == null ? GitHubArtifactConstants.ServerArtifactName : "",
+            webapp == null ? GitHubArtifactConstants.WebappArtifactName : "",
+        }.Where(value => !string.IsNullOrWhiteSpace(value)));
+        throw new InvalidOperationException($"Required artifact(s) not found in repository artifacts: {missing}.");
     }
 
     public async Task<string> DownloadArtifactAsync(
@@ -75,7 +74,7 @@ public class GitHubActionsArtifactService
         var targetPath = Path.Combine(targetDirectory, $"{artifact.Name}.{artifact.Id}.zip");
         logs.Add(new OperationLogEntry(DateTimeOffset.Now, "info", $"Downloading artifact `{artifact.Name}`."));
 
-        using var request = CreateRequest(config, artifact.ArchiveDownloadUrl);
+        using var request = CreateRequest(artifact.ArchiveDownloadUrl);
         using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         response.EnsureSuccessStatusCode();
 
@@ -87,45 +86,31 @@ public class GitHubActionsArtifactService
         return targetPath;
     }
 
-    private async Task<JsonDocument> GetJsonAsync(StagerConfig config, string url, CancellationToken cancellationToken)
+    private async Task<JsonDocument> GetJsonAsync(string url, CancellationToken cancellationToken)
     {
-        using var request = CreateRequest(config, url);
+        using var request = CreateRequest(url);
         using var response = await _httpClient.SendAsync(request, cancellationToken);
         response.EnsureSuccessStatusCode();
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         return await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
     }
 
-    private static HttpRequestMessage CreateRequest(StagerConfig config, string url)
+    private static HttpRequestMessage CreateRequest(string url)
     {
         var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.UserAgent.ParseAdd("ChattyStager/1.0");
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
-        if (!string.IsNullOrWhiteSpace(config.GitHubToken))
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", config.GitHubToken);
         return request;
     }
 
-    private static bool IsRunBuildCommit(JsonElement run)
+    private static ArtifactInfo CreateArtifactInfo(JsonElement artifact)
     {
-        if (!run.TryGetProperty("head_commit", out var commit) ||
-            commit.ValueKind == JsonValueKind.Null ||
-            !commit.TryGetProperty("message", out var messageElement))
-        {
-            return false;
-        }
-
-        var message = messageElement.GetString() ?? "";
-        return message.StartsWith("[run-build]", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static void EnsureGitHubConfig(StagerConfig config)
-    {
-        if (string.IsNullOrWhiteSpace(config.GitHubOwner) ||
-            string.IsNullOrWhiteSpace(config.GitHubRepo) ||
-            string.IsNullOrWhiteSpace(config.GitHubWorkflow))
-        {
-            throw new InvalidOperationException("GitHub owner, repo, and workflow are required.");
-        }
+        return new ArtifactInfo(
+            artifact.GetProperty("id").GetInt64(),
+            artifact.GetProperty("name").GetString() ?? "",
+            artifact.GetProperty("archive_download_url").GetString() ?? "",
+            artifact.TryGetProperty("size_in_bytes", out var size) ? size.GetInt64() : 0,
+            artifact.GetProperty("created_at").GetDateTimeOffset(),
+            artifact.GetProperty("expires_at").GetDateTimeOffset());
     }
 }

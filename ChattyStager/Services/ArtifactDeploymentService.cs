@@ -23,7 +23,7 @@ public class ArtifactDeploymentService
         try
         {
             var artifact = await RunStepAsync(steps, "Find backend artifact", logs, async () =>
-                await _githubArtifacts.FindLatestSuccessfulArtifactAsync(config, config.BackendArtifactName, logs, cancellationToken));
+                await _githubArtifacts.FindLatestSuccessfulArtifactAsync(config, GitHubArtifactConstants.ServerArtifactName, logs, cancellationToken));
 
             var zipPath = await RunStepAsync(steps, "Download backend artifact", logs, async () =>
                 await _githubArtifacts.DownloadArtifactAsync(config, artifact, _configService.GetArtifactCachePath(config), logs, cancellationToken));
@@ -34,8 +34,38 @@ public class ArtifactDeploymentService
         }
         catch (Exception ex)
         {
-            logs.Add(new OperationLogEntry(DateTimeOffset.Now, "error", Sanitize(ex.Message, config)));
+            logs.Add(new OperationLogEntry(DateTimeOffset.Now, "error", ex.Message));
             return new DeploymentResult(false, ex.Message, _configService.GetBackendDeployPath(config), steps, logs);
+        }
+    }
+
+    public async Task<(DeploymentResult Backend, DeploymentResult Webapp)> DeployBuildArtifactsFromGitHubAsync(StagerConfig config, CancellationToken cancellationToken = default)
+    {
+        _configService.ApplyDefaults(config);
+        var artifactLogs = new List<OperationLogEntry>();
+        try
+        {
+            var artifacts = await _githubArtifacts.FindLatestBuildArtifactsAsync(artifactLogs, cancellationToken);
+            var backend = await DeployBackendArtifactAsync(config, artifacts.Server, artifactLogs, cancellationToken);
+            if (!backend.Success)
+            {
+                return (backend, new DeploymentResult(
+                    false,
+                    "Web artifact deployment skipped because server artifact deployment failed.",
+                    _configService.GetWebDeployPath(config),
+                    [],
+                    artifactLogs));
+            }
+
+            var webapp = await DeployWebArtifactAsync(config, artifacts.Webapp, artifactLogs, cancellationToken);
+            return (backend, webapp);
+        }
+        catch (Exception ex)
+        {
+            artifactLogs.Add(new OperationLogEntry(DateTimeOffset.Now, "error", ex.Message));
+            return (
+                new DeploymentResult(false, ex.Message, _configService.GetBackendDeployPath(config), [], artifactLogs),
+                new DeploymentResult(false, ex.Message, _configService.GetWebDeployPath(config), [], artifactLogs));
         }
     }
 
@@ -48,7 +78,7 @@ public class ArtifactDeploymentService
         try
         {
             var artifact = await RunStepAsync(steps, "Find web artifact", logs, async () =>
-                await _githubArtifacts.FindLatestSuccessfulArtifactAsync(config, config.WebArtifactName, logs, cancellationToken));
+                await _githubArtifacts.FindLatestSuccessfulArtifactAsync(config, GitHubArtifactConstants.WebappArtifactName, logs, cancellationToken));
 
             var zipPath = await RunStepAsync(steps, "Download web artifact", logs, async () =>
                 await _githubArtifacts.DownloadArtifactAsync(config, artifact, _configService.GetArtifactCachePath(config), logs, cancellationToken));
@@ -76,7 +106,74 @@ public class ArtifactDeploymentService
         }
         catch (Exception ex)
         {
-            logs.Add(new OperationLogEntry(DateTimeOffset.Now, "error", Sanitize(ex.Message, config)));
+            logs.Add(new OperationLogEntry(DateTimeOffset.Now, "error", ex.Message));
+            return new DeploymentResult(false, ex.Message, _configService.GetWebDeployPath(config), steps, logs);
+        }
+    }
+
+    private async Task<DeploymentResult> DeployBackendArtifactAsync(
+        StagerConfig config,
+        ArtifactInfo artifact,
+        IReadOnlyList<OperationLogEntry> artifactLogs,
+        CancellationToken cancellationToken)
+    {
+        var logs = artifactLogs.ToList();
+        var steps = new List<DeploymentStepResult>();
+
+        try
+        {
+            var zipPath = await RunStepAsync(steps, "Download backend artifact", logs, async () =>
+                await _githubArtifacts.DownloadArtifactAsync(config, artifact, _configService.GetArtifactCachePath(config), logs, cancellationToken));
+
+            var targetPath = await DeployBackendZipCoreAsync(config, zipPath, "backend", steps, logs, cancellationToken);
+
+            return new DeploymentResult(true, "Backend artifact deployed.", targetPath, steps, logs);
+        }
+        catch (Exception ex)
+        {
+            logs.Add(new OperationLogEntry(DateTimeOffset.Now, "error", ex.Message));
+            return new DeploymentResult(false, ex.Message, _configService.GetBackendDeployPath(config), steps, logs);
+        }
+    }
+
+    private async Task<DeploymentResult> DeployWebArtifactAsync(
+        StagerConfig config,
+        ArtifactInfo artifact,
+        IReadOnlyList<OperationLogEntry> artifactLogs,
+        CancellationToken cancellationToken)
+    {
+        var logs = artifactLogs.ToList();
+        var steps = new List<DeploymentStepResult>();
+
+        try
+        {
+            var zipPath = await RunStepAsync(steps, "Download web artifact", logs, async () =>
+                await _githubArtifacts.DownloadArtifactAsync(config, artifact, _configService.GetArtifactCachePath(config), logs, cancellationToken));
+
+            var extractedPath = await RunStepAsync(steps, "Extract web artifact", logs, () =>
+                Task.FromResult(ExtractZip(config, zipPath, "web")));
+
+            var webRoot = await RunStepAsync(steps, "Validate web artifact", logs, () =>
+                Task.FromResult(FindWebRoot(extractedPath)));
+
+            var targetPath = await RunStepAsync(steps, "Publish web artifact", logs, () =>
+            {
+                var target = _configService.GetWebDeployPath(config);
+                PublishWebRoot(webRoot, target);
+                return Task.FromResult(target);
+            });
+
+            await RunStepAsync(steps, "Verify webapp index", logs, () =>
+            {
+                VerifyPublishedWebRoot(targetPath);
+                return Task.FromResult(true);
+            });
+
+            return new DeploymentResult(true, "Web artifact deployed.", targetPath, steps, logs);
+        }
+        catch (Exception ex)
+        {
+            logs.Add(new OperationLogEntry(DateTimeOffset.Now, "error", ex.Message));
             return new DeploymentResult(false, ex.Message, _configService.GetWebDeployPath(config), steps, logs);
         }
     }
@@ -95,7 +192,7 @@ public class ArtifactDeploymentService
         }
         catch (Exception ex)
         {
-            logs.Add(new OperationLogEntry(DateTimeOffset.Now, "error", Sanitize(ex.Message, config)));
+            logs.Add(new OperationLogEntry(DateTimeOffset.Now, "error", ex.Message));
             return new DeploymentResult(false, ex.Message, _configService.GetBackendDeployPath(config), steps, logs);
         }
     }
@@ -197,7 +294,6 @@ public class ArtifactDeploymentService
                     backendRoot,
                     timeout: TimeSpan.FromMinutes(8),
                     logs: logs,
-                    sanitize: message => Sanitize(message, config),
                     cancellationToken: cancellationToken);
 
                 if (result.ExitCode == 0)
@@ -389,10 +485,4 @@ public class ArtifactDeploymentService
         }
     }
 
-    private static string Sanitize(string message, StagerConfig config)
-    {
-        return string.IsNullOrWhiteSpace(config.GitHubToken)
-            ? message
-            : message.Replace(config.GitHubToken, "***");
-    }
 }
