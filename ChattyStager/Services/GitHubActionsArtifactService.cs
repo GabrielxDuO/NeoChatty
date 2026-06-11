@@ -31,23 +31,32 @@ public class GitHubActionsArtifactService
         List<OperationLogEntry> logs,
         CancellationToken cancellationToken = default)
     {
-        logs.Add(new OperationLogEntry(DateTimeOffset.Now, "info", $"Finding latest `{GitHubArtifactConstants.ServerArtifactName}` and `{GitHubArtifactConstants.WebappArtifactName}` artifacts from public repository artifacts."));
+        logs.Add(new OperationLogEntry(DateTimeOffset.Now, "info", $"Finding `{GitHubArtifactConstants.ServerArtifactName}` and `{GitHubArtifactConstants.WebappArtifactName}` from latest public release assets."));
 
-        using var artifactsDoc = await GetJsonAsync(GitHubArtifactConstants.RepositoryArtifactsUrl, cancellationToken);
+        using var releasesDoc = await GetJsonAsync(GitHubArtifactConstants.RepositoryReleasesUrl, cancellationToken);
+        var releases = releasesDoc.RootElement.EnumerateArray().ToList();
+        if (releases.Count == 0)
+            throw new InvalidOperationException("No GitHub releases were found.");
+
+        var latestRelease = releases[0];
+        var releaseName = latestRelease.TryGetProperty("name", out var nameElement) ? nameElement.GetString() : null;
+        var releaseTag = latestRelease.TryGetProperty("tag_name", out var tagElement) ? tagElement.GetString() : null;
+        logs.Add(new OperationLogEntry(DateTimeOffset.Now, "info", $"Using release `{releaseName ?? releaseTag ?? "latest"}`."));
+
         ArtifactInfo? server = null;
         ArtifactInfo? webapp = null;
 
-        foreach (var artifact in artifactsDoc.RootElement.GetProperty("artifacts").EnumerateArray())
+        foreach (var asset in latestRelease.GetProperty("assets").EnumerateArray())
         {
-            var name = artifact.GetProperty("name").GetString() ?? "";
+            var name = asset.GetProperty("name").GetString() ?? "";
             if (server == null && string.Equals(name, GitHubArtifactConstants.ServerArtifactName, StringComparison.OrdinalIgnoreCase))
             {
-                server = CreateArtifactInfo(artifact);
+                server = CreateArtifactInfo(asset);
                 logs.Add(new OperationLogEntry(DateTimeOffset.Now, "info", $"Matched artifact `{server.Name}` ({server.SizeInBytes} bytes)."));
             }
             else if (webapp == null && string.Equals(name, GitHubArtifactConstants.WebappArtifactName, StringComparison.OrdinalIgnoreCase))
             {
-                webapp = CreateArtifactInfo(artifact);
+                webapp = CreateArtifactInfo(asset);
                 logs.Add(new OperationLogEntry(DateTimeOffset.Now, "info", $"Matched artifact `{webapp.Name}` ({webapp.SizeInBytes} bytes)."));
             }
 
@@ -60,7 +69,7 @@ public class GitHubActionsArtifactService
             server == null ? GitHubArtifactConstants.ServerArtifactName : "",
             webapp == null ? GitHubArtifactConstants.WebappArtifactName : "",
         }.Where(value => !string.IsNullOrWhiteSpace(value)));
-        throw new InvalidOperationException($"Required artifact(s) not found in repository artifacts: {missing}.");
+        throw new InvalidOperationException($"Required release asset(s) not found in latest release: {missing}.");
     }
 
     public async Task<string> DownloadArtifactAsync(
@@ -108,9 +117,9 @@ public class GitHubActionsArtifactService
         return new ArtifactInfo(
             artifact.GetProperty("id").GetInt64(),
             artifact.GetProperty("name").GetString() ?? "",
-            artifact.GetProperty("archive_download_url").GetString() ?? "",
-            artifact.TryGetProperty("size_in_bytes", out var size) ? size.GetInt64() : 0,
+            artifact.GetProperty("browser_download_url").GetString() ?? "",
+            artifact.TryGetProperty("size", out var size) ? size.GetInt64() : 0,
             artifact.GetProperty("created_at").GetDateTimeOffset(),
-            artifact.GetProperty("expires_at").GetDateTimeOffset());
+            artifact.TryGetProperty("updated_at", out var updatedAt) ? updatedAt.GetDateTimeOffset() : artifact.GetProperty("created_at").GetDateTimeOffset());
     }
 }
